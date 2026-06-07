@@ -1,9 +1,18 @@
-# Service Level Indicators
+﻿# Trellis.ServiceLevelIndicators
 
-[![Build](https://github.com/xavierjohn/ServiceLevelIndicators/actions/workflows/build.yml/badge.svg)](https://github.com/xavierjohn/ServiceLevelIndicators/actions/workflows/build.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Build](https://github.com/xavierjohn/Trellis.ServiceLevelIndicators/actions/workflows/build.yml/badge.svg)](https://github.com/xavierjohn/Trellis.ServiceLevelIndicators/actions/workflows/build.yml)
+[![NuGet: Trellis.ServiceLevelIndicators](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.svg?label=Trellis.ServiceLevelIndicators)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators)
+[![NuGet: Asp](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.Asp.svg?label=Trellis.ServiceLevelIndicators.Asp)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp)
+[![NuGet: ApiVersioning](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.Asp.ApiVersioning.svg?label=Trellis.ServiceLevelIndicators.Asp.ApiVersioning)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp.ApiVersioning)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/Trellis.ServiceLevelIndicators.svg)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/download)
+[![C#](https://img.shields.io/badge/C%23-14.0-blue.svg)](https://docs.microsoft.com/en-us/dotnet/csharp/)
+[![GitHub Stars](https://img.shields.io/github/stars/xavierjohn/Trellis.ServiceLevelIndicators?style=social)](https://github.com/xavierjohn/Trellis.ServiceLevelIndicators/stargazers)
 
-ServiceLevelIndicators is a .NET library for emitting service-level latency metrics in milliseconds using the standard [System.Diagnostics.Metrics](https://learn.microsoft.com/dotnet/api/system.diagnostics.metrics) and OpenTelemetry pipeline.
+> Latency SLI library for .NET: emits operation-duration histograms via `System.Diagnostics.Metrics` + OpenTelemetry, with rich dimensions (CustomerResourceId, LocationId, Operation, Outcome) and ASP.NET Core + API-versioning integrations.
+
+`Trellis.ServiceLevelIndicators` is a .NET library for emitting service-level latency metrics in milliseconds using the standard [System.Diagnostics.Metrics](https://learn.microsoft.com/dotnet/api/system.diagnostics.metrics) and OpenTelemetry pipeline.
 
 It is designed for teams that need more than generic request timing. The library helps measure meaningful operations, attach service-specific dimensions such as customer, location, operation name, and SLI outcome, and build SLO or SLA-oriented dashboards and alerts from those metrics.
 
@@ -344,3 +353,14 @@ To view the metrics locally using the [.NET Aspire Dashboard](https://aspire.dev
 ![SLI](assets/aspire.jpg)
 4. If you run the sample with API Versioning, you will see something similar to the following.
 ![SLI](assets/versioned.jpg)
+
+## Related repositories
+
+- [`xavierjohn/Trellis`](https://github.com/xavierjohn/Trellis) — the framework: `Result<T>`, `Maybe<T>`, value objects, DDD primitives, ASP.NET / EF Core / Mediator integration. SLI metrics integrate naturally with Trellis pipeline behaviors.
+- [`xavierjohn/Trellis.Microservices`](https://github.com/xavierjohn/Trellis.Microservices) — microservice trust-boundary packages: YARP gateway minting internal JWTs + consumer-side actor provider.
+- [`xavierjohn/Trellis.Microservices.Template`](https://github.com/xavierjohn/Trellis.Microservices.Template) — `dotnet new trellis-microservices` Project Tracker starter.
+- [`xavierjohn/Trellis.AspTemplate`](https://github.com/xavierjohn/Trellis.AspTemplate) — `dotnet new trellis-asp` single-service Clean Architecture template.
+
+## License
+
+[MIT](LICENSE).
