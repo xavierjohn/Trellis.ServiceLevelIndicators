@@ -1,3 +1,12 @@
+---
+package: Trellis.ServiceLevelIndicators
+namespaces: [Trellis.ServiceLevelIndicators]
+types: [ServiceLevelIndicator, ServiceLevelIndicatorOptions, MeasuredOperation, SliOutcome, IEnrichmentContext, "IEnrichment<T>", IServiceLevelIndicatorBuilder, ServiceLevelIndicatorMeterProviderBuilderExtensions, AddServiceLevelIndicator, AddServiceLevelIndicatorInstrumentation]
+version: v10
+last_verified: 2026-06-18
+audience: [llm]
+---
+
 # Trellis.ServiceLevelIndicators — API Reference
 
 **Package:** `Trellis.ServiceLevelIndicators`  
