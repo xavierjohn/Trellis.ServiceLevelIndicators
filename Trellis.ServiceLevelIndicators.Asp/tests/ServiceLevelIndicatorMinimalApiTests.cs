@@ -161,6 +161,85 @@ public class ServiceLevelIndicatorMinimalApiTests : IDisposable
     }
 
     [Fact]
+    public async Task SLI_Metrics_trims_trailing_slash_from_route_group_root_operation()
+    {
+        // Regression: a route group's root endpoint ("/grouped" prefix + "/") produces a trailing
+        // slash in the raw route template. The Operation tag must drop it so "/grouped/" and
+        // "/grouped" map to a single bounded series rather than two.
+        // Arrange
+        using var host = await CreateMinimalApiHost();
+
+        // Act
+        var response = await host.GetTestClient().PostAsync("grouped/", content: null, TestContext.Current.CancellationToken);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var expectedTags = new KeyValuePair<string, object?>[]
+        {
+            new("CustomerResourceId", "TestCustomerResourceId"),
+            new("LocationId", "ms-loc://az/public/West US 3"),
+            new("Operation", "POST /grouped"),
+            new("Outcome", "Success"),
+            new("http.request.method", "POST"),
+            new("http.response.status.code", 200),
+        };
+
+        ValidateMetrics(expectedTags);
+    }
+
+    [Fact]
+    public async Task SLI_Metrics_trims_trailing_slash_from_explicitly_authored_route()
+    {
+        // The trailing-slash trim is deliberate and not limited to route-group roots: an explicitly
+        // authored "/explicit-trailing/" route emits "GET /explicit-trailing" as well.
+        // Arrange
+        using var host = await CreateMinimalApiHost();
+
+        // Act
+        var response = await host.GetTestClient().GetAsync("explicit-trailing/", TestContext.Current.CancellationToken);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var expectedTags = new KeyValuePair<string, object?>[]
+        {
+            new("CustomerResourceId", "TestCustomerResourceId"),
+            new("LocationId", "ms-loc://az/public/West US 3"),
+            new("Operation", "GET /explicit-trailing"),
+            new("Outcome", "Success"),
+            new("http.response.status.code", 200),
+        };
+
+        ValidateMetrics(expectedTags);
+    }
+
+    [Fact]
+    public async Task SLI_Metrics_preserves_literal_root_path_operation()
+    {
+        // Guard: the trim must keep the literal root path "/" intact, not reduce it to the empty string.
+        // Arrange
+        using var host = await CreateMinimalApiHost();
+
+        // Act
+        var response = await host.GetTestClient().GetAsync("/", TestContext.Current.CancellationToken);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var expectedTags = new KeyValuePair<string, object?>[]
+        {
+            new("CustomerResourceId", "TestCustomerResourceId"),
+            new("LocationId", "ms-loc://az/public/West US 3"),
+            new("Operation", "GET /"),
+            new("Outcome", "Success"),
+            new("http.response.status.code", 200),
+        };
+
+        ValidateMetrics(expectedTags);
+    }
+
+    [Fact]
     public async Task SLI_Metrics_not_emitted_when_AddServiceLevelIndicator_not_called()
     {
         // Arrange
@@ -262,6 +341,21 @@ public class ServiceLevelIndicatorMinimalApiTests : IDisposable
                             .AddServiceLevelIndicator();
 
                         endpoints.MapGet("/no-sli", () => "No SLI");
+
+                        // A route group's root endpoint: the "/grouped" prefix combined with the
+                        // "/" pattern yields the raw template "/grouped/" (with a trailing slash).
+                        var grouped = endpoints.MapGroup("/grouped")
+                            .AddServiceLevelIndicator();
+                        grouped.MapPost("/", () => "Created");
+
+                        // An explicitly authored trailing-slash route normalizes the same way as a
+                        // route-group root — the trim is deliberate and applies to any route template.
+                        endpoints.MapGet("/explicit-trailing/", () => "Trailing")
+                            .AddServiceLevelIndicator();
+
+                        // The literal root path must keep its single slash (it must not be trimmed away).
+                        endpoints.MapGet("/", () => "Root")
+                            .AddServiceLevelIndicator();
                     });
                 }))
             .StartAsync();

@@ -114,6 +114,8 @@ Or set it imperatively from claims/headers via `Enrich` or `HttpContext.GetMeasu
 2. MVC attribute route template (`AttributeRouteInfo.Template`).
 3. The endpoint's route pattern (`RouteEndpoint.RoutePattern.RawText`) — covers Minimal APIs and conventional MVC routing. Placeholders such as `{id}` are preserved, **never** substituted with the concrete request value.
 
+A trailing slash is trimmed from the resolved template (the literal root `/` is preserved), so a route group's root endpoint — where the `/orders` group prefix combines with the `/` pattern to produce `/orders/` — shares one series with `/orders` instead of emitting a separate `POST /orders/`.
+
 If none of those yield a bounded template (e.g. a synthetic problem-details endpoint emitted by Asp.Versioning when the API version is invalid), the middleware emits the sentinel `"<METHOD> <unrouted>"` and logs a one-time warning per endpoint name. **If you see `<unrouted>` in your metrics, an endpoint is missing a route template — fix it by adding an attribute route or moving to a routed endpoint.**
 
 ## Customizations

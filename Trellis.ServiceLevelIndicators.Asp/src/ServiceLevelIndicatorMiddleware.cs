@@ -169,6 +169,16 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
             return context.Request.Method.ToUpperInvariant() + " <unrouted>";
         }
 
+        // A route group's root endpoint yields a trailing slash in the raw template (e.g. a "/orders"
+        // group combined with the "/" pattern => "/orders/"). Trim it so "/orders/" and "/orders"
+        // share a single Operation series, while preserving the literal root path "/".
+        if (template.Length > 1)
+        {
+            var normalized = template.TrimEnd('/');
+            if (normalized.Length > 0)
+                template = normalized;
+        }
+
         return context.Request.Method.ToUpperInvariant() + " " + template;
     }
 
