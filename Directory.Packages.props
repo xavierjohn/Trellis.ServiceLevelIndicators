@@ -1,4 +1,9 @@
-<Project>
+﻿<Project>
+  <PropertyGroup>
+    <!-- Allow a central PackageVersion to override a transitively-resolved package
+         (used below to pin the vulnerable SQLite native lib to a patched version). -->
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
   <!-- Runtime -->
   <ItemGroup>
     <PackageVersion Include="Asp.Versioning.Http" Version="10.0.0" />
