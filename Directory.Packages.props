@@ -20,6 +20,12 @@
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.16.0" />
     <PackageVersion Include="Scalar.AspNetCore" Version="2.16.4" />
     <PackageVersion Include="Scalar.AspNetCore.Microsoft" Version="2.16.4" />
+        <!-- Security pin (transitive): Microsoft.AspNetCore.OpenApi 10.0.9 / Asp.Versioning.OpenApi
+         pull Microsoft.OpenApi 2.0.0, which has a high-severity DoS vuln
+         (GHSA-v5pm-xwqc-g5wc / CVE-2026-49451 / NU1903; a circular schema reference can
+         stack-overflow the parser; 2.0.0-preview11..2.7.4 affected). 2.7.5 is the patched 2.x
+         release and stays ABI-compatible with the 2.x consumers above. -->
+    <PackageVersion Include="Microsoft.OpenApi" Version="2.7.5" />
   </ItemGroup>
   <!-- Test -->
   <ItemGroup>
