@@ -1,4 +1,5 @@
-﻿using Azure.Core;
+﻿using Asp.Versioning;
+using Azure.Core;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using Scalar.AspNetCore;
@@ -9,7 +10,7 @@ var builder = WebApplication.CreateBuilder(args);
 // Add services to the container.
 
 builder.Services.AddControllers();
-builder.Services.AddApiVersioning()
+builder.Services.AddApiVersioning(options => options.ApiVersionReader = new QueryStringApiVersionReader())
         .AddMvc()
         .AddApiExplorer()
         .AddOpenApi(options => options.Document.AddScalarTransformers());
