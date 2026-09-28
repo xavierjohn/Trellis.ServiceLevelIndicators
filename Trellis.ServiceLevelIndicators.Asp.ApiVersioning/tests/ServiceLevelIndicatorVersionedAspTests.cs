@@ -214,7 +214,9 @@ public class ServiceLevelIndicatorVersionedAspTests : IDisposable
                     services.AddApiVersioning(options
                         =>
                     {
+#pragma warning disable AV0016 // This test verifies the default-version fallback for a versioned endpoint.
                         options.AssumeDefaultVersionWhenUnspecified = true;
+#pragma warning restore AV0016
                         options.DefaultApiVersion = new ApiVersion(new DateOnly(2023, 8, 29));
                     })
                     .AddMvc();
