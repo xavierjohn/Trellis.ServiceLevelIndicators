@@ -354,6 +354,33 @@ To view the metrics locally using the [.NET Aspire Dashboard](https://aspire.dev
 4. If you run the sample with API Versioning, you will see something similar to the following.
 ![SLI](assets/versioned.jpg)
 
+## Optional API guidance for coding assistants
+
+Each ServiceLevelIndicators NuGet package now carries its own versioned API reference
+and guidance manifest. The packages remain independent of `Trellis.Core`.
+Ordinary restore/build do not write `.github/`, `AGENTS.md`, or `.agentdocs/`
+unless the consuming repository explicitly opts into the separate local
+`Trellis.AgentDocs` tool. After restoring the consuming project or solution,
+run once from its Git root:
+
+```powershell
+dotnet new tool-manifest --output .config
+dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.9 --tool-manifest .config/dotnet-tools.json
+dotnet tool run agentdocs init <solution-or-project>
+```
+
+Reuse an existing root `.config/dotnet-tools.json` instead of creating another.
+`init` installs guides into Git-root `.agentdocs/`, adds managed instruction
+pointers, and opts the repository into updating its guides on later
+`dotnet restore` invocations. The helper and tool are preview packages published
+on NuGet.org.
+
+For package maintainers, the three publishing projects use a pinned, private
+`Trellis.AgentDocs.Packaging` build dependency to generate their manifests at
+pack time. Its build target is not included in the published SLI
+packages. Run `pwsh build/test-guidance-packages.ps1` after packing to verify
+the payload and absence of legacy consumer targets.
+
 ## Related repositories
 
 - [`xavierjohn/Trellis`](https://github.com/xavierjohn/Trellis) — the framework: `Result<T>`, `Maybe<T>`, value objects, DDD primitives, ASP.NET / EF Core / Mediator integration. SLI metrics integrate naturally with Trellis pipeline behaviors.

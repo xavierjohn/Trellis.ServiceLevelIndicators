@@ -73,8 +73,10 @@ jobs:
         fail_ci_if_error: false
 
     - name: Pack
-      if: ${{ success() && !github.base_ref }}
       run: dotnet pack --no-build --verbosity normal -c Release -o artifacts/
+
+    - name: Verify packed guidance
+      run: pwsh -NoProfile -File build/test-guidance-packages.ps1
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v6
