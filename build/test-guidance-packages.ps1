@@ -1,5 +1,5 @@
-[CmdletBinding()]
-param([string] $PackagesDirectory = (Join-Path $PSScriptRoot '..\artifacts'))
+﻿[CmdletBinding()]
+param([string] $PackagesDirectory = (Join-Path (Join-Path $PSScriptRoot '..') 'artifacts'))
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest

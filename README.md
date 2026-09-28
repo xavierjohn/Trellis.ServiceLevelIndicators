@@ -365,11 +365,11 @@ run once from its Git root:
 
 ```powershell
 dotnet new tool-manifest --output .config
-dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.9 --tool-manifest .config\dotnet-tools.json
+dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.9 --tool-manifest .config/dotnet-tools.json
 dotnet tool run agentdocs init <solution-or-project>
 ```
 
-Reuse an existing root `.config\dotnet-tools.json` instead of creating another.
+Reuse an existing root `.config/dotnet-tools.json` instead of creating another.
 `init` installs guides into Git-root `.agentdocs/`, adds managed instruction
 pointers, and opts the repository into updating its guides on later
 `dotnet restore` invocations. The helper and tool are preview packages published
