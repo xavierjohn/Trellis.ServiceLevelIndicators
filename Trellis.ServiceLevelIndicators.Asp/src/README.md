@@ -1,4 +1,4 @@
-# Trellis.ServiceLevelIndicators.Asp
+﻿# Trellis.ServiceLevelIndicators.Asp
 
 [![NuGet Package](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.Asp.svg)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp)
 
@@ -203,6 +203,23 @@ options.AutomaticallyEmitted = false;
 ```
 
 Then add `[ServiceLevelIndicator]` only to the controllers you want measured.
+
+## Optional AgentDocs setup
+
+This package includes a versioned API reference, but restoring it does not install
+agent instructions. To opt in, restore your consuming project or solution, then
+run from its Git root:
+
+```powershell
+dotnet new tool-manifest --output .config
+dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.12 --tool-manifest .config/dotnet-tools.json
+dotnet tool run agentdocs init <solution-or-project>
+```
+
+If the repository already has `.config/dotnet-tools.json`, reuse it instead of
+creating another manifest. `init` installs verified guidance under Git-root
+`.agentdocs/` and adds managed instruction pointers; later restores refresh
+the guidance.
 
 ## Further Reading
 

@@ -62,6 +62,18 @@ foreach ($id in $references.Keys) {
         if ($metadata.SelectSingleNode('//*[local-name()="dependency" and (@id="Trellis.AgentDocs.Packaging" or @id="Trellis.Core")]')) {
             throw "$id leaks a publisher-only dependency or introduces a Core dependency."
         }
+        if ($metadata.SelectSingleNode('//*[local-name()="readme"]')?.InnerText -ne 'README.md') {
+            throw "$id must declare its packed README.md as the NuGet readme."
+        }
+        $readmeEntry = $archive.GetEntry('README.md')
+        if (-not $readmeEntry) { throw "$id is missing its NuGet readme." }
+        $readmeReader = [System.IO.StreamReader]::new($readmeEntry.Open())
+        try { $readme = $readmeReader.ReadToEnd() }
+        finally { $readmeReader.Dispose() }
+        if ($readme -notmatch '(?m)^dotnet tool install Trellis\.AgentDocs --version \S+ --tool-manifest \.config/dotnet-tools\.json\r?$' -or
+            -not $readme.Contains('dotnet tool run agentdocs init <solution-or-project>')) {
+            throw "$id NuGet readme must explain how to install and initialize AgentDocs."
+        }
         Write-Host "PASS $($packages[0].Name) ships validated guidance without consumer targets"
     }
     finally { $archive.Dispose() }

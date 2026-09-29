@@ -1,4 +1,4 @@
-# Trellis.ServiceLevelIndicators.Asp.ApiVersioning
+﻿# Trellis.ServiceLevelIndicators.Asp.ApiVersioning
 
 [![NuGet Package](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.Asp.ApiVersioning.svg)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp.ApiVersioning)
 
@@ -46,6 +46,23 @@ This registers `ApiVersionEnrichment`, which reads the resolved API version from
 | `http.api.version` | The single resolved API version string (e.g. `1.0`, `2024-01-15`), `Neutral` for API-version-neutral endpoints, `Unspecified` when no version is requested and no default is assumed, or an empty string for invalid or ambiguous requests |
 
 This attribute is added alongside all the standard attributes emitted by `Trellis.ServiceLevelIndicators.Asp` (`Operation`, `CustomerResourceId`, `LocationId`, `Outcome`, `http.request.method`, `http.response.status.code`).
+
+## Optional AgentDocs setup
+
+This package includes a versioned API reference, but restoring it does not install
+agent instructions. To opt in, restore your consuming project or solution, then
+run from its Git root:
+
+```powershell
+dotnet new tool-manifest --output .config
+dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.12 --tool-manifest .config/dotnet-tools.json
+dotnet tool run agentdocs init <solution-or-project>
+```
+
+If the repository already has `.config/dotnet-tools.json`, reuse it instead of
+creating another manifest. `init` installs verified guidance under Git-root
+`.agentdocs/` and adds managed instruction pointers; later restores refresh
+the guidance.
 
 ## Further Reading
 
