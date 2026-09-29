@@ -20,10 +20,15 @@ foreach ($id in $references.Keys) {
     $archive = [System.IO.Compression.ZipFile]::OpenRead($packages[0].FullName)
     try {
         $manifestEntry = $archive.GetEntry('guidance/reference-manifest.json')
-        $referencePath = "trellis/$($references[$id])"
+        $referencePath = $references[$id]
         $referenceEntry = $archive.GetEntry($referencePath)
         if (-not $manifestEntry -or -not $referenceEntry) {
             throw "$id must pack its guidance manifest and $referencePath."
+        }
+        if (@($archive.Entries | Where-Object {
+            $_.FullName.StartsWith('trellis/', [StringComparison]::OrdinalIgnoreCase)
+        }).Count -ne 0) {
+            throw "$id must not pack a trellis/ directory."
         }
 
         $reader = [System.IO.StreamReader]::new($manifestEntry.Open())
