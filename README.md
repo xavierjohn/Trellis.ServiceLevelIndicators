@@ -357,7 +357,8 @@ To view the metrics locally using the [.NET Aspire Dashboard](https://aspire.dev
 ## Optional API guidance for coding assistants
 
 Each ServiceLevelIndicators NuGet package now carries its own versioned API reference
-and guidance manifest. The packages remain independent of `Trellis.Core`.
+at the package root (`trellis-api-sli*.md`) and guidance manifest. The packages
+remain independent of `Trellis.Core`.
 Ordinary restore/build do not write `.github/`, `AGENTS.md`, or `.agentdocs/`
 unless the consuming repository explicitly opts into the separate local
 `Trellis.AgentDocs` tool. After restoring the consuming project or solution,
@@ -365,7 +366,7 @@ run once from its Git root:
 
 ```powershell
 dotnet new tool-manifest --output .config
-dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.11 --tool-manifest .config/dotnet-tools.json
+dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.12 --tool-manifest .config/dotnet-tools.json
 dotnet tool run agentdocs init <solution-or-project>
 ```
 
