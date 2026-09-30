@@ -53,7 +53,10 @@ foreach ($id in $references.Keys) {
             throw "$id manifest does not match the packed reference bytes, on-demand usage, and description."
         }
         # Each package installs into its own directory, so a relative link to a sibling package's reference breaks.
-        if ($referenceText -match '\]\(trellis-[a-z0-9-]+\.md') {
+        # Any non-absolute link to a trellis-*.md file counts, whatever its prefix (./, ../, subfolders) or anchor,
+        # in inline form [text](target) or reference form [id]: target.
+        if ($referenceText -match '\]\(\s*(?!https?:|mailto:|#)[^)\s]*trellis-[a-z0-9-]+\.md' -or
+            $referenceText -match '(?m)^\s*\[[^\]]+\]:\s*(?!https?:|mailto:|#)\S*trellis-[a-z0-9-]+\.md') {
             throw "$id links to another package's reference file; refer to other packages by ID instead."
         }
 
