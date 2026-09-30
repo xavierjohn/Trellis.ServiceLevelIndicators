@@ -3,6 +3,8 @@
   <PropertyGroup Condition="'$(TrellisApiRefName)' != ''">
     <PackageGuidanceDocument>$(MSBuildThisFileDirectory)docs\api_reference\trellis-api-$(TrellisApiRefName).md</PackageGuidanceDocument>
     <PackageGuidancePath>trellis-api-$(TrellisApiRefName).md</PackageGuidancePath>
+    <PackageGuidanceUsage>onDemand</PackageGuidanceUsage>
+    <PackageGuidanceDescription>$(TrellisApiRefDescription)</PackageGuidanceDescription>
   </PropertyGroup>
 
 </Project>

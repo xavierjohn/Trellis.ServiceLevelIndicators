@@ -39,14 +39,22 @@ foreach ($id in $references.Keys) {
             $referenceEntry.Open().CopyTo($referenceBytes)
             $hash = [Convert]::ToHexString(
                 [System.Security.Cryptography.SHA256]::HashData($referenceBytes.ToArray())).ToLowerInvariant()
+            $referenceText = [System.Text.Encoding]::UTF8.GetString($referenceBytes.ToArray())
         }
         finally { $referenceBytes.Dispose() }
 
+        $description = [string] $manifest.documents[0].description
         if ($manifest.schemaVersion -ne 1 -or @($manifest.documents).Count -ne 1 -or
             $manifest.documents[0].path -ne $referencePath -or
             $manifest.documents[0].sha256 -ne $hash -or
-            @($manifest.entryPoints).Count -ne 1 -or $manifest.entryPoints[0] -ne $referencePath) {
-            throw "$id manifest does not match the packed reference bytes and entry point."
+            $manifest.documents[0].usage -ne 'onDemand' -or
+            $description.Length -eq 0 -or $description.Length -gt 200 -or $description -notmatch '^Open when ' -or
+            $null -ne $manifest.PSObject.Properties['entryPoints']) {
+            throw "$id manifest does not match the packed reference bytes, on-demand usage, and description."
+        }
+        # Each package installs into its own directory, so a relative link to a sibling package's reference breaks.
+        if ($referenceText -match '\]\(trellis-[a-z0-9-]+\.md') {
+            throw "$id links to another package's reference file; refer to other packages by ID instead."
         }
 
         if (@($archive.Entries | Where-Object {

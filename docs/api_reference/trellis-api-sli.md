@@ -11,9 +11,9 @@ audience: [llm]
 
 **Package:** `Trellis.ServiceLevelIndicators`  
 **Namespace:** `Trellis.ServiceLevelIndicators`  
-**Purpose:** Core library for emitting Service Level Indicator (SLI) latency metrics in milliseconds via `System.Diagnostics.Metrics` / OpenTelemetry. Use directly in console apps, worker services, background jobs, and shared libraries that should stay independent from ASP.NET Core. For ASP.NET Core integration, see [`trellis-api-sli-asp.md`](trellis-api-sli-asp.md).
+**Purpose:** Core library for emitting Service Level Indicator (SLI) latency metrics in milliseconds via `System.Diagnostics.Metrics` / OpenTelemetry. Use directly in console apps, worker services, background jobs, and shared libraries that should stay independent from ASP.NET Core. For ASP.NET Core integration, see the `Trellis.ServiceLevelIndicators.Asp` reference, when installed.
 
-See also: [`trellis-api-sli-asp.md`](trellis-api-sli-asp.md), [`trellis-api-sli-apiversioning.md`](trellis-api-sli-apiversioning.md).
+See also the `Trellis.ServiceLevelIndicators.Asp` and `Trellis.ServiceLevelIndicators.Asp.ApiVersioning` references, when installed.
 
 ---
 

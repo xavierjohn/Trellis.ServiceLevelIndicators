@@ -4,6 +4,7 @@
         <Description>Core library for emitting Service Level Indicator (SLI) latency metrics from .NET applications via the OpenTelemetry-compatible Meter / Histogram API. Provides ServiceLevelIndicator, MeasuredOperation, and helpers to register a meter with a MeterProvider.</Description>
         <PackageTags>sli;slo;opentelemetry;metrics;observability;telemetry;trellis</PackageTags>
         <TrellisApiRefName>sli</TrellisApiRefName>
+        <TrellisApiRefDescription>Open when adding or troubleshooting Service Level Indicator latency metrics with ServiceLevelIndicator and MeasuredOperation outside ASP.NET Core.</TrellisApiRefDescription>
     </PropertyGroup>
     <ItemGroup>
         <None Include="README.md" Pack="true" PackagePath="\" />
