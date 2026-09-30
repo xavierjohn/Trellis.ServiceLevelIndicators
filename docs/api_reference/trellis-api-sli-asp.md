@@ -11,11 +11,11 @@ audience: [llm]
 
 **Package:** `Trellis.ServiceLevelIndicators.Asp`  
 **Namespace:** `Trellis.ServiceLevelIndicators`  
-**Purpose:** ASP.NET Core integration for [`Trellis.ServiceLevelIndicators`](trellis-api-sli.md). Provides middleware that automatically emits SLI latency metrics for every request, MVC and Minimal API attribute conventions for tagging the customer resource id and additional measured route values, and an enrichment pipeline for adding custom attributes (e.g. HTTP method, API version).
+**Purpose:** ASP.NET Core integration for `Trellis.ServiceLevelIndicators`. Provides middleware that automatically emits SLI latency metrics for every request, MVC and Minimal API attribute conventions for tagging the customer resource id and additional measured route values, and an enrichment pipeline for adding custom attributes (e.g. HTTP method, API version).
 
-For API-versioning-specific enrichment, see [`trellis-api-sli-apiversioning.md`](trellis-api-sli-apiversioning.md).
+For API-versioning-specific enrichment, see the `Trellis.ServiceLevelIndicators.Asp.ApiVersioning` reference, when installed.
 
-See also: [`trellis-api-sli.md`](trellis-api-sli.md).
+See also the `Trellis.ServiceLevelIndicators` reference, when installed.
 
 ---
 

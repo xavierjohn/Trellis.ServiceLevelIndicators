@@ -366,19 +366,27 @@ run once from its Git root:
 
 ```powershell
 dotnet new tool-manifest --output .config
-dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.12 --tool-manifest .config/dotnet-tools.json
+dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.14 --tool-manifest .config/dotnet-tools.json
 dotnet tool run agentdocs init <solution-or-project>
 ```
 
 Reuse an existing root `.config/dotnet-tools.json` instead of creating another.
-`init` installs guides into Git-root `.agentdocs/`, adds managed instruction
-pointers, and opts the repository into updating its guides on later
-`dotnet restore` invocations. The helper and tool are preview packages published
-on NuGet.org.
+Restoring a package never activates its guide. `init` lists each package that
+publishes guidance as pending and prints the package IDs to add to
+`approvedPackages` in `.agentdocs/policy.json`. Add the SLI packages you trust,
+then run `dotnet tool run agentdocs sync` to install their guides into Git-root
+`.agentdocs/`; `init` also adds the managed instruction pointers. The SLI guides
+are on-demand: the generated index lists each with a description, and an agent
+opens one when its task concerns SLI metrics. After a package upgrade, run
+`dotnet restore` and then `dotnet tool run agentdocs sync`. The helper and tool
+are preview packages published on NuGet.org.
 
 For package maintainers, the three publishing projects use a pinned, private
 `Trellis.AgentDocs.Packaging` build dependency to generate their manifests at
-pack time. Its build target is not included in the published SLI
+pack time. Each project sets `TrellisApiRefDescription`, the one-line "Open
+when..." topic consumers see in their index, and the guides refer to sibling
+packages by ID rather than by link because every package installs into its own
+directory. Its build target is not included in the published SLI
 packages. Run `pwsh build/test-guidance-packages.ps1` after packing to verify
 the payload and absence of legacy consumer targets.
 

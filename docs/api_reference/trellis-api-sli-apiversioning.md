@@ -11,9 +11,9 @@ audience: [llm]
 
 **Package:** `Trellis.ServiceLevelIndicators.Asp.ApiVersioning`  
 **Namespace:** `Trellis.ServiceLevelIndicators`  
-**Purpose:** Adds the resolved API version as the `http.api.version` measurement dimension to every request emitted by [`Trellis.ServiceLevelIndicators.Asp`](trellis-api-sli-asp.md). Use only when your ASP.NET Core application also uses the [`Asp.Versioning`](https://github.com/dotnet/aspnet-api-versioning) package family. This package is an extension; it does **not** replace `Trellis.ServiceLevelIndicators.Asp`.
+**Purpose:** Adds the resolved API version as the `http.api.version` measurement dimension to every request emitted by `Trellis.ServiceLevelIndicators.Asp`. Use only when your ASP.NET Core application also uses the [`Asp.Versioning`](https://github.com/dotnet/aspnet-api-versioning) package family. This package is an extension; it does **not** replace `Trellis.ServiceLevelIndicators.Asp`.
 
-See also: [`trellis-api-sli.md`](trellis-api-sli.md), [`trellis-api-sli-asp.md`](trellis-api-sli-asp.md).
+See also the `Trellis.ServiceLevelIndicators` and `Trellis.ServiceLevelIndicators.Asp` references, when installed.
 
 ---
 
