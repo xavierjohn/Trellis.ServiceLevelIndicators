@@ -204,6 +204,27 @@ options.AutomaticallyEmitted = false;
 
 Then add `[ServiceLevelIndicator]` only to the controllers you want measured.
 
+## Optional AgentDocs setup
+
+This package includes a versioned API reference, but restoring it does not install
+agent instructions. To opt in, restore your consuming project or solution, then
+run from its Git root:
+
+```powershell
+dotnet new tool-manifest --output .config
+dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.14 --tool-manifest .config/dotnet-tools.json
+dotnet tool run agentdocs init <solution-or-project>
+```
+
+If the repository already has `.config/dotnet-tools.json`, reuse it instead of
+creating another manifest. Restoring a package never activates its guide: `init`
+lists `Trellis.ServiceLevelIndicators.Asp` as pending and prints the package IDs to add to
+`approvedPackages` in `.agentdocs/policy.json`. Add the ones you trust, then run
+`dotnet tool run agentdocs sync` to install the guides under Git-root
+`.agentdocs/`. The guide is on-demand: the generated index describes it, and an
+agent opens it when its task concerns SLI metrics. After a package upgrade, run
+`dotnet restore` and then `dotnet tool run agentdocs sync`.
+
 ## Further Reading
 
 - [Full documentation and samples](https://github.com/xavierjohn/ServiceLevelIndicators)
