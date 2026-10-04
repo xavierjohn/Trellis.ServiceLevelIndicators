@@ -4,6 +4,14 @@ param([string] $PackagesDirectory = (Join-Path (Join-Path $PSScriptRoot '..') 'a
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+function Test-AgentDocsInstallCommand {
+    param([string] $Readme, [string] $ExpectedCommand)
+
+    $commands = [regex]::Matches($Readme,
+        '(?im)^[\t ]*dotnet[\t ]+tool[\t ]+install[\t ]+Trellis\.AgentDocs(?=[\t \r\n]|$)[^\r\n]*\r?$')
+    return $commands.Count -eq 1 -and $commands[0].Value.TrimEnd("`r") -ceq $ExpectedCommand
+}
+
 $references = [ordered]@{
     'Trellis.ServiceLevelIndicators' = 'trellis-api-sli.md'
     'Trellis.ServiceLevelIndicators.Asp' = 'trellis-api-sli-asp.md'
@@ -15,6 +23,23 @@ $references = [ordered]@{
 # is published in lockstep with the tool.
 $props = [xml] (Get-Content -LiteralPath (Join-Path (Join-Path $PSScriptRoot '..') 'Directory.Packages.props') -Raw)
 $toolVersion = $props.SelectSingleNode('//PackageVersion[@Include="Trellis.AgentDocs.Packaging"]').Version
+$installCommand = "dotnet tool install Trellis.AgentDocs --version $toolVersion --tool-manifest .config/dotnet-tools.json"
+$staleCommand = $installCommand.Replace($toolVersion, '0.0.0')
+$installCases = @(
+    @{ Name = 'correct LF'; Readme = "$installCommand`n"; Expected = $true },
+    @{ Name = 'correct CRLF'; Readme = "$installCommand`r`n"; Expected = $true },
+    @{ Name = 'missing'; Readme = ''; Expected = $false },
+    @{ Name = 'stale only'; Readme = $staleCommand; Expected = $false },
+    @{ Name = 'duplicate correct'; Readme = "$installCommand`n$installCommand"; Expected = $false },
+    @{ Name = 'conflicting version'; Readme = "$installCommand`n$staleCommand"; Expected = $false },
+    @{ Name = 'indented conflicting version'; Readme = "$installCommand`n  $staleCommand"; Expected = $false }
+)
+foreach ($case in $installCases) {
+    if ((Test-AgentDocsInstallCommand -Readme $case.Readme -ExpectedCommand $installCommand) -ne $case.Expected) {
+        throw "AgentDocs install-command regression failed: $($case.Name)."
+    }
+}
+Write-Host 'PASS AgentDocs single-command and version-pin regression cases'
 $toolDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "agentdocs-validate-$([guid]::NewGuid().ToString('N'))"
 $install = & dotnet tool install Trellis.AgentDocs --version $toolVersion --tool-path $toolDirectory 2>&1
 if ($LASTEXITCODE -ne 0) { throw "Could not install Trellis.AgentDocs $toolVersion for validation:`n$($install | Out-String)" }
@@ -91,9 +116,9 @@ try {
             $readmeReader = [System.IO.StreamReader]::new($readmeEntry.Open())
             try { $readme = $readmeReader.ReadToEnd() }
             finally { $readmeReader.Dispose() }
-            if ($readme -notmatch '(?m)^dotnet tool install Trellis\.AgentDocs --version \S+ --tool-manifest \.config/dotnet-tools\.json\r?$' -or
+            if (-not (Test-AgentDocsInstallCommand -Readme $readme -ExpectedCommand $installCommand) -or
                 -not $readme.Contains('dotnet tool run agentdocs init <solution-or-project>')) {
-                throw "$id NuGet readme must explain how to install and initialize AgentDocs."
+                throw "$id NuGet readme must contain exactly one Trellis.AgentDocs install command pinned to $toolVersion and explain how to initialize it."
             }
             # Restoring a package never activates its guide: the readme must describe approval and sync.
             if (-not $readme.Contains('approvedPackages') -or -not $readme.Contains('dotnet tool run agentdocs sync')) {
