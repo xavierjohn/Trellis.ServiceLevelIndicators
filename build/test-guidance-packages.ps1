@@ -91,9 +91,10 @@ try {
             $readmeReader = [System.IO.StreamReader]::new($readmeEntry.Open())
             try { $readme = $readmeReader.ReadToEnd() }
             finally { $readmeReader.Dispose() }
-            if ($readme -notmatch '(?m)^dotnet tool install Trellis\.AgentDocs --version \S+ --tool-manifest \.config/dotnet-tools\.json\r?$' -or
+            $installCommand = "dotnet tool install Trellis.AgentDocs --version $toolVersion --tool-manifest .config/dotnet-tools.json"
+            if ([regex]::Matches($readme, "(?m)^$([regex]::Escape($installCommand))\r?$").Count -ne 1 -or
                 -not $readme.Contains('dotnet tool run agentdocs init <solution-or-project>')) {
-                throw "$id NuGet readme must explain how to install and initialize AgentDocs."
+                throw "$id NuGet readme must pin Trellis.AgentDocs $toolVersion and explain how to initialize it."
             }
             # Restoring a package never activates its guide: the readme must describe approval and sync.
             if (-not $readme.Contains('approvedPackages') -or -not $readme.Contains('dotnet tool run agentdocs sync')) {
