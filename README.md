@@ -18,7 +18,9 @@ It is designed for teams that need more than generic request timing. The library
 
 Service level indicators (SLIs) are metrics used to track how a service is performing against expected reliability and responsiveness goals. Common examples include availability, response time, throughput, and error rate. This library focuses on latency SLIs so you can consistently measure operation duration across background work, ASP.NET Core APIs, and versioned endpoints.
 
-[![Watch the video](https://img.youtube.com/vi/wXJbA0AkcRE/hqdefault.jpg)](https://www.youtube.com/embed/wXJbA0AkcRE)
+### Video guide
+
+[![Trellis Service Level Indicators for .NET: Complete NuGet Guide](assets/sli-video-thumbnail.png)](https://youtu.be/jpReYDjaEH0)
 
 
 ## Service Level Indicator Library
