@@ -14,6 +14,7 @@ public class ServiceLevelIndicatorAspTests : IDisposable
 {
     private readonly Meter _meter;
     private readonly MeterListener _meterListener;
+    private readonly TaskCompletionSource<bool> _measurementRecorded = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ITestOutputHelper _output;
     private bool _callbackCalled;
     private bool _disposedValue;
@@ -456,6 +457,7 @@ public class ServiceLevelIndicatorAspTests : IDisposable
         Func<Task> act = () => host.GetTestClient().GetAsync("test/request_aborted", TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
+        await _measurementRecorded.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var expectedTags = new KeyValuePair<string, object?>[]
         {
@@ -495,6 +497,7 @@ public class ServiceLevelIndicatorAspTests : IDisposable
         _instrument = instrument;
         _measurement = measurement;
         _actualTags = tags.ToArray();
+        _measurementRecorded.TrySetResult(true);
         _output.WriteLine($"Measurement {measurement}");
     }
 
