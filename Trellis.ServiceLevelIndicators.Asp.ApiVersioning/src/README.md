@@ -33,6 +33,10 @@ builder.Services.AddServiceLevelIndicator(options =>
 
 This registers `ApiVersionEnrichment`, which reads the resolved API version from the request and emits it as an attribute on every SLI measurement.
 
+Already-resolved versions are retained on aborted MVC and Minimal API requests. The built-in enrichment opts into `IEnrichment<WebEnrichmentContext>.EnrichOnCancellation` because it performs bounded metadata access without I/O; arbitrary user async enrichments are still skipped after cancellation.
+
+When `ServiceLevelIndicatorOptions.LatencyThresholds` enables `operation.duration.threshold.count`, the counter also retains `http.api.version`. Configure distinct positive whole-millisecond thresholds at startup, for example `options.LatencyThresholds.Add(TimeSpan.FromSeconds(2))`, and register the same SLI meter with OpenTelemetry.
+
 ## Requirements
 
 - ASP.NET Core application using [Trellis.ServiceLevelIndicators.Asp](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp)
@@ -45,7 +49,9 @@ This registers `ApiVersionEnrichment`, which reads the resolved API version from
 |-----------|-------------|
 | `http.api.version` | The single resolved API version string (e.g. `1.0`, `2024-01-15`), `Neutral` for API-version-neutral endpoints, `Unspecified` when no version is requested and no default is assumed, or an empty string for invalid or ambiguous requests |
 
-This attribute is added alongside all the standard attributes emitted by `Trellis.ServiceLevelIndicators.Asp` (`Operation`, `CustomerResourceId`, `LocationId`, `Outcome`, `http.request.method`, `http.response.status.code`).
+This attribute is added alongside the standard dimensions emitted by `Trellis.ServiceLevelIndicators.Asp`. On aborts, the duration includes `sli.request.aborted = true` and omits `http.response.status.code` if headers have not started. The threshold counter omits HTTP status, method, and the abort-exception diagnostic.
+
+Date-based versions remain date-only strings in library telemetry. Kusto may interpret a date-like value in dynamic `Properties` as a `datetime`; normalize it at the query boundary rather than changing the library's version format.
 
 ## Optional AgentDocs setup
 

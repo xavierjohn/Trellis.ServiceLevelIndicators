@@ -2,10 +2,10 @@
     <PropertyGroup>
         <PackageReadmeFile>README.md</PackageReadmeFile>
         <RootNamespace>Trellis.ServiceLevelIndicators</RootNamespace>
-        <Description>Adds the resolved API version as the http.api.version SLI dimension when the ASP.NET Core app uses Asp.Versioning. Extension package for Trellis.ServiceLevelIndicators.Asp.</Description>
+        <Description>Adds the resolved API version as the http.api.version SLI dimension when the ASP.NET Core app uses Asp.Versioning, including aborted requests and opt-in threshold counts. Extension package for Trellis.ServiceLevelIndicators.Asp.</Description>
         <PackageTags>sli;slo;api-versioning;aspnetcore;opentelemetry;metrics;observability;telemetry;trellis</PackageTags>
         <TrellisApiRefName>sli-apiversioning</TrellisApiRefName>
-        <TrellisApiRefDescription>Open when SLI metrics need the resolved API version as the http.api.version dimension in an app that uses Asp.Versioning.</TrellisApiRefDescription>
+        <TrellisApiRefDescription>Open when preserving resolved API-version dimensions on SLI duration and threshold metrics, including aborted ASP.NET Core requests using Asp.Versioning.</TrellisApiRefDescription>
     </PropertyGroup>
     <ItemGroup>
         <None Include="README.md" Pack="true" PackagePath="\" />

@@ -3,7 +3,7 @@ package: Trellis.ServiceLevelIndicators.Asp.ApiVersioning
 namespaces: [Trellis.ServiceLevelIndicators]
 types: [ServiceLevelIndicatorServiceCollectionExtensions, ApiVersionEnrichment]
 version: v10
-last_verified: 2026-06-18
+last_verified: 2026-10-15
 audience: [llm]
 ---
 
@@ -22,6 +22,8 @@ See also the `Trellis.ServiceLevelIndicators` and `Trellis.ServiceLevelIndicator
 | Tag | Value |
 |---|---|
 | `http.api.version` | The single resolved API version (e.g. `2023-06-06`), `"Neutral"` if the endpoint is API-version-neutral, `"Unspecified"` if no version was requested and no default was assumed, or `""` if the request is invalid or ambiguous. |
+
+Resolved versions are retained on aborted MVC and Minimal API requests, and on the opt-in `operation.duration.threshold.count` counter. Date-based values remain date-only strings; Kusto may interpret date-like dynamic properties as `datetime`, which should be normalized in queries rather than by changing library formatting.
 
 ---
 
@@ -61,6 +63,12 @@ Reads `HttpContext.ApiVersioningFeature` and emits `http.api.version`. Resolutio
 | `0` | otherwise | `"Unspecified"` |
 
 This enrichment is registered as a singleton via `TryAddEnumerable`, so calling `AddApiVersion()` more than once is idempotent.
+
+**Properties**
+
+| Name | Type | Value | Description |
+|---|---|---|---|
+| `EnrichOnCancellation` | `bool` | `true` | Runs after request cancellation because version resolution is bounded metadata access without I/O. User async enrichments do not opt in automatically. |
 
 **Methods**
 

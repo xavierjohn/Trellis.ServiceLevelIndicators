@@ -57,7 +57,7 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
         {
             unhandledException = ex;
 
-            if (!IsRequestAborted(context, ex) &&
+            if (!context.RequestAborted.IsCancellationRequested &&
                 !context.Response.HasStarted &&
                 context.Response.StatusCode < StatusCodes.Status500InternalServerError)
             {
@@ -75,10 +75,11 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
 
                 foreach (var enrichment in _enrichments)
                 {
-                    if (context.RequestAborted.IsCancellationRequested) break;
-
                     try
                     {
+                        if (context.RequestAborted.IsCancellationRequested && !enrichment.EnrichOnCancellation)
+                            continue;
+
                         await enrichment.EnrichAsync(webmeasurementContext, context.RequestAborted);
                     }
                     catch (Exception ex)
@@ -111,36 +112,37 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
     private void UpdateOperationWithResponseStatus(HttpContext context, MeasuredOperation measuredOperation, Exception? unhandledException)
     {
         var statusCode = context.Response.StatusCode;
+        var requestAborted = context.RequestAborted.IsCancellationRequested;
         measuredOperation.Attributes.Add(new KeyValuePair<string, object?>("http.request.method", context.Request.Method));
-        measuredOperation.Attributes.Add(new KeyValuePair<string, object?>("http.response.status.code", statusCode));
+        if (!requestAborted || context.Response.HasStarted)
+            measuredOperation.Attributes.Add(new KeyValuePair<string, object?>("http.response.status.code", statusCode));
 
-        var outcome = context.RequestAborted.IsCancellationRequested
-            ? SliOutcome.Ignored
-            : unhandledException is not null
-                ? SliOutcome.Failure
-                : _httpOptions.ClassifyOutcome?.Invoke(context) ?? ClassifyStatusCode(statusCode);
+        SliOutcome outcome;
+        if (requestAborted)
+        {
+            outcome = SliOutcome.Ignored;
+            measuredOperation.Attributes.Add(new KeyValuePair<string, object?>("sli.request.aborted", true));
+            if (unhandledException is not null)
+            {
+                measuredOperation.Attributes.Add(new KeyValuePair<string, object?>(
+                    "sli.request.abort_exception",
+                    unhandledException is OperationCanceledException ? "cancellation" : "other"));
+            }
+        }
+        else if (unhandledException is not null)
+        {
+            outcome = SliOutcome.Failure;
+        }
+        else
+        {
+            var defaultOutcome = HttpOutcomeClassifier.ClassifyStatusCode(statusCode);
+            outcome = _httpOptions.ClassifyOutcomeWithDefault?.Invoke(context, defaultOutcome)
+                ?? _httpOptions.ClassifyOutcome?.Invoke(context)
+                ?? defaultOutcome;
+        }
 
         measuredOperation.SetOutcome(outcome);
     }
-
-    private static SliOutcome ClassifyStatusCode(int statusCode) => statusCode switch
-    {
-        >= StatusCodes.Status200OK and < StatusCodes.Status400BadRequest => SliOutcome.Success,
-        StatusCodes.Status400BadRequest
-            or StatusCodes.Status401Unauthorized
-            or StatusCodes.Status403Forbidden
-            or StatusCodes.Status404NotFound
-            or StatusCodes.Status409Conflict
-            or StatusCodes.Status412PreconditionFailed
-            or StatusCodes.Status422UnprocessableEntity => SliOutcome.ClientError,
-        StatusCodes.Status429TooManyRequests => SliOutcome.Failure,
-        >= StatusCodes.Status500InternalServerError => SliOutcome.Failure,
-        _ => SliOutcome.Ignored,
-    };
-
-    private static bool IsRequestAborted(HttpContext context, Exception? exception) =>
-        context.RequestAborted.IsCancellationRequested &&
-        exception is OperationCanceledException;
 
     private bool ShouldEmitMetrics(EndpointMetadataCollection metadata) =>
         _serviceLevelIndicator.ServiceLevelIndicatorOptions.AutomaticallyEmitted || GetSliAttribute(metadata) is not null;

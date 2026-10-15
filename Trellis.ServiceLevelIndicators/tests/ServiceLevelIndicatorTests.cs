@@ -566,6 +566,10 @@ public class ServiceLevelIndicatorTests : IDisposable
     [InlineData("activity.status.code")]
     [InlineData("http.request.method")]
     [InlineData("http.response.status.code")]
+    [InlineData("sli.request.aborted")]
+    [InlineData("sli.request.abort_exception")]
+    [InlineData("sli.latency.threshold_ms")]
+    [InlineData("sli.latency.result")]
     public void Record_rejects_reserved_custom_attribute_names(string reservedName)
     {
         // Arrange
@@ -608,6 +612,10 @@ public class ServiceLevelIndicatorTests : IDisposable
     [InlineData("activity.status.code")]
     [InlineData("http.request.method")]
     [InlineData("http.response.status.code")]
+    [InlineData("sli.request.aborted")]
+    [InlineData("sli.request.abort_exception")]
+    [InlineData("sli.latency.threshold_ms")]
+    [InlineData("sli.latency.result")]
     public void StartMeasuring_rejects_reserved_initial_attribute_names(string reservedName)
     {
         // Arrange
@@ -631,6 +639,10 @@ public class ServiceLevelIndicatorTests : IDisposable
     [InlineData("activity.status.code")]
     [InlineData("http.request.method")]
     [InlineData("http.response.status.code")]
+    [InlineData("sli.request.aborted")]
+    [InlineData("sli.request.abort_exception")]
+    [InlineData("sli.latency.threshold_ms")]
+    [InlineData("sli.latency.result")]
     public void MeasuredOperation_AddAttribute_rejects_reserved_attribute_names(string reservedName)
     {
         // Arrange

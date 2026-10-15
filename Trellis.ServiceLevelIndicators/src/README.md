@@ -81,7 +81,7 @@ var attribute = new KeyValuePair<string, object?>("Event", "OrderCreated");
 using var op = sli.StartMeasuring("ProcessOrder", attribute);
 ```
 
-Custom attribute names must be unique and must not reuse SLI-reserved tags such as `CustomerResourceId`, `LocationId`, `Operation`, `Outcome`, `activity.status.code`, `http.request.method`, or `http.response.status.code`.
+Custom attribute names must be unique and must not reuse SLI-reserved tags: `CustomerResourceId`, `LocationId`, `Operation`, `Outcome`, `activity.status.code`, `http.request.method`, `http.response.status.code`, `sli.request.aborted`, `sli.request.abort_exception`, `sli.latency.threshold_ms`, or `sli.latency.result`.
 
 ## Emitted Metrics
 
@@ -98,9 +98,41 @@ By default, a meter named `Trellis.SLI` emits the `operation.duration` histogram
 
 Direct `Record(...)` calls emit `CustomerResourceId`, `LocationId`, `Operation`, `Outcome`, and any custom attributes supplied to the call. Without an explicit outcome, manual/background measurements default to `Ignored`.
 
+## Optional Threshold Counter
+
+When a backend discards histogram buckets, opt in to exact timing counts at chosen thresholds:
+
+```csharp
+builder.Services.AddServiceLevelIndicator(options =>
+{
+    options.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
+    options.CustomerResourceId = "tenant-a";
+    options.LatencyThresholds.Add(TimeSpan.FromSeconds(2));
+    options.LatencyThresholds.Add(TimeSpan.FromSeconds(10));
+});
+```
+
+`LatencyThresholds` is an initially empty, get-only collection. Configure distinct, positive, whole-millisecond values at startup. Invalid or duplicate values fail before instruments are created; configuration is snapshotted when the singleton is constructed.
+
+| Element | Contract |
+|---|---|
+| Instrument | `operation.duration.threshold.count` |
+| Type / unit | `Counter<long>` / `{operation}` |
+| Value | One increment per operation per configured threshold |
+| `sli.latency.threshold_ms` | Integer milliseconds, e.g. `2000` |
+| `sli.latency.result` | `within` when recorded elapsed milliseconds are `<=` the threshold, otherwise `exceeded` |
+
+All `Record`, scope, and helper paths contribute, regardless of outcome. Both instruments use the configured meter. The duration histogram keeps its original dimensions; threshold attributes exist only on the counter. The counter retains required/custom dimensions, `http.api.version`, and `sli.request.aborted` when present, but omits `http.response.status.code`, `http.request.method`, and `sli.request.abort_exception`.
+
+Select one threshold when computing a ratio. Timing is independent of outcome: successful-and-fast objectives require `Outcome == Success` in the numerator and an explicit eligibility policy. No eligible traffic is no data, not 100%. This counter supports configured boundaries, not arbitrary percentiles.
+
+On the Azure Monitor delta-export path, each `AppMetrics.Sum` is the interval's increment: sum those values over the window, not exported rows or `ItemCount`. Cumulative Prometheus counters instead require `increase`/`rate` semantics. See the repository usage reference for complete query recipes.
+
 ## Cardinality Guidance
 
 Required tags must be stable and meaningful. Good values: tenant, subscription, environment, region, product tier, work-item type. Bad values: per-request GUIDs, timestamps, free-form user input, or raw emails when a stable object ID is available. The same rule applies to any custom attributes you add via `MeasuredOperation.AddAttribute(...)`.
+
+For a fixed meter/resource scope, `N` thresholds and `P` projected base-tag combinations add at most `2 * N * P` counter series. `P` includes outcome and retained optional/custom dimensions. Backend resource/instance dimensions can further multiply deployment-wide series.
 
 ## Disposal
 

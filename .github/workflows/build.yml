@@ -84,3 +84,23 @@ jobs:
       with:
         name: artifact
         path: artifacts/
+
+  sql-cancellation:
+    runs-on: windows-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Restore provider test dependencies
+      run: dotnet restore Trellis.ServiceLevelIndicators.Asp\tests\Trellis.ServiceLevelIndicators.Asp.Tests.csproj
+
+    - name: Test real SqlClient cancellation with isolated LocalDB
+      shell: pwsh
+      run: .\build\test-sql-cancellation.ps1

@@ -75,9 +75,25 @@ Measured HTTP requests emit the following attributes:
 | `Operation` | The HTTP method + route template (e.g. `GET /teams/{teamId}`) — see [How `Operation` is resolved](#how-operation-is-resolved) below. |
 | `CustomerResourceId` | The **target resource** of the operation — see [What `CustomerResourceId` is — and what it is NOT](#what-customerresourceid-is--and-what-it-is-not) below. |
 | `LocationId` | Where the service is running |
-| `Outcome` | `Success`, `Failure`, `ClientError`, or `Ignored`; 2xx/3xx responses are `Success`, common 4xx caller errors are `ClientError`, 429/5xx and unhandled exceptions are `Failure`, and request-aborted cancellations are `Ignored` |
-| `http.response.status.code` | The HTTP response status code |
+| `Outcome` | `Success`, `Failure`, `ClientError`, or `Ignored`; 2xx/3xx responses are `Success`, common 4xx caller errors are `ClientError`, 429/5xx and escaping exceptions without an abort are `Failure`. An observed request abort takes precedence and is `Ignored`. |
+| `http.response.status.code` | The HTTP response status code; omitted on an aborted request before headers have started, otherwise retained |
 | `http.request.method` | The HTTP method |
+| `sli.request.aborted` | `true` on an observed abort; absent otherwise |
+| `sli.request.abort_exception` | On an abort with an escaping exception: `cancellation` for top-level `OperationCanceledException` (including `TaskCanceledException`), otherwise `other`; absent without an exception or abort |
+
+No synthetic 499 or abort-related 500 is manufactured. Wrapped cancellations, provider exceptions, and aggregates do not override an observed request abort. Exceptions still propagate. The diagnostic describes the top-level exception's shape, not its cause; `other` does not prove an independent service failure.
+
+**Behavior change:** an aborted request with unsent headers no longer emits a phantom status 200. A started response keeps its actual status.
+
+The middleware measures routed endpoints, not genuine route misses. Matched endpoints lacking a bounded template use the existing `<unrouted>` sentinel.
+
+### Optional threshold counts
+
+Configure `options.LatencyThresholds.Add(TimeSpan.FromSeconds(2))` to enable `operation.duration.threshold.count` (`Counter<long>`, unit `{operation}`) on the same meter. Each measured request contributes once per configured threshold, with `sli.latency.threshold_ms` and `sli.latency.result = within | exceeded`; equality is within. Distinct positive whole-millisecond values are validated and snapshotted at construction; the default is disabled.
+
+The counter retains SLI, API-version, abort, and custom dimensions, but excludes HTTP status, HTTP method, and `sli.request.abort_exception`. The duration histogram is unchanged. A fast failure is not a good event merely because its timing result is `within`.
+
+Abort-first availability can miss slow dependency outages when callers disconnect before the server fails. Pair availability with a successful-and-fast latency objective that includes slow aborts. The abort diagnostic helps investigation but is not a reliable standalone outage detector. Use the repository's usage reference for the full policy and Azure delta-counter query.
 
 ### What `CustomerResourceId` is — and what it is NOT
 
@@ -124,6 +140,22 @@ If none of those yield a bounded template (e.g. a synthetic problem-details endp
 
 `http.request.method` is emitted by default. `AddHttpMethod()` remains available as a no-op for older setup code.
 
+### Customize HTTP classification
+
+Override a normal-response mapping while retaining every other built-in mapping:
+
+```csharp
+builder.Services.AddServiceLevelIndicator(options => options.LocationId = locationId)
+    .ClassifyHttpOutcome((context, defaultOutcome) =>
+        context.Response.StatusCode == 429 && IsCallerQuotaRejection(context)
+            ? SliOutcome.ClientError
+            : defaultOutcome);
+```
+
+`IsCallerQuotaRejection` is application-specific limiter metadata. A caller quota may be `ClientError`; service-capacity rejection should remain `Failure`. `HttpOutcomeClassifier.ClassifyStatusCode(int)` exposes the default mapper.
+
+The existing one-argument callback remains a replacement classifier. Last fluent registration wins across both overloads. For direct options configuration, `ServiceLevelIndicatorHttpOptions.ClassifyOutcomeWithDefault` takes precedence over `ClassifyOutcome` when both are set. Neither callback overrides request aborts or escaping exceptions.
+
 ### Enrich with custom data
 
 Use `Enrich` (or `EnrichAsync`) to set `CustomerResourceId` from a stable identifier on the request (a tenant/subscription claim, a header, etc.) or to add custom attributes. **Do not use the caller's identity (UPN, user ID) as `CustomerResourceId`** — that's the caller, not the resource being acted on. See [What `CustomerResourceId` is — and what it is NOT](#what-customerresourceid-is--and-what-it-is-not).
@@ -143,6 +175,8 @@ builder.Services.AddServiceLevelIndicator(options => { /* ... */ })
         context.AddAttribute("CallerTier", tier);
     });
 ```
+
+    `Enrich` and `EnrichAsync` delegates are skipped once request cancellation is observed. To preserve already-resolved metadata on aborts, implement `IEnrichment<WebEnrichmentContext>` with `EnrichOnCancellation => true` and register it in DI. Only opt in for bounded, cancellation-safe metadata access without I/O; the canceled token is still passed. Skipped enrichments do not prevent later cancellation-safe enrichments from running. The API-version package already opts in.
 
 ### Override the operation name
 

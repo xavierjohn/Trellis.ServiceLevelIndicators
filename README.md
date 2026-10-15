@@ -38,9 +38,11 @@ By default, a meter named `Trellis.SLI` with instrument name `operation.duration
 **Trellis.ServiceLevelIndicators.Asp** adds the following dimensions.
 
 - Operation - For ASP.NET endpoints, the operation name is the HTTP method plus the route template, resolved in this order: (1) `[ServiceLevelIndicator(Operation = "...")]` attribute or `.AddServiceLevelIndicator("op")` override, (2) MVC `AttributeRouteInfo.Template`, (3) the endpoint's `RouteEndpoint.RoutePattern.RawText` (Minimal APIs / conventional routing). Route placeholders such as `{id}` are preserved, never substituted with the concrete request value. A trailing slash is trimmed (the literal root `/` is kept), so a route group's root and its slashless form share one series. If no bounded template is available, the middleware emits the sentinel `"<METHOD> <unrouted>"` and logs a warning — see that value in your metrics as a signal to add a route template.
-- Outcome - By default, 2xx and 3xx responses are `Success`, common caller errors such as 400/401/403/404/409/412/422 are `ClientError`, 429 and 5xx responses are `Failure`, and request-aborted cancellations are `Ignored`.
-- http.response.status.code - The http status code.
+- Outcome - By default, 2xx and 3xx responses are `Success`, common caller errors such as 400/401/403/404/409/412/422 are `ClientError`, and 429 and 5xx responses are `Failure`. An observed request abort takes precedence over escaping exceptions and remains `Ignored`.
+- http.response.status.code - The HTTP status code. Omitted on an aborted request when response headers have not started; otherwise the actual status is retained.
 - http.request.method - The http request method (GET, POST, etc).
+- sli.request.aborted - `true` when the request-abort token is canceled; absent otherwise.
+- sli.request.abort_exception - Duration-only diagnostic on an aborted request with an escaping exception: `cancellation` for a top-level `OperationCanceledException`, `other` for every other exception shape. This describes shape, not cause.
 
 Difference between ServiceLevelIndicator and http.server.request.duration
 
@@ -53,7 +55,7 @@ Difference between ServiceLevelIndicator and http.server.request.duration
 This makes the library useful when generic HTTP server metrics are not enough, especially for multi-tenant services, APIs with customer-specific objectives, or workloads that need the same SLI model outside HTTP request handling.
 
 **Trellis.ServiceLevelIndicators.Asp.ApiVersioning** adds the following dimensions.
-- http.api.version - The resolved API version when used in conjunction with the [API Versioning package](https://github.com/dotnet/aspnet-api-versioning). The value can be a version string, `Neutral`, `Unspecified`, or an empty string for invalid or ambiguous requests.
+- http.api.version - The resolved API version when used in conjunction with the [API Versioning package](https://github.com/dotnet/aspnet-api-versioning), including on aborted requests. The value can be a version string, `Neutral`, `Unspecified`, or an empty string for invalid or ambiguous requests.
 
 
 ## NuGet Packages
@@ -217,6 +219,27 @@ void MeasureCodeBlock(ServiceLevelIndicator serviceLevelIndicator)
 
 ## Operational Guidance
 
+### Threshold latency objectives
+
+Opt in to threshold counts without changing the duration histogram:
+
+```csharp
+builder.Services.AddServiceLevelIndicator(options =>
+{
+    options.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
+    options.LatencyThresholds.Add(TimeSpan.FromSeconds(2));
+    options.LatencyThresholds.Add(TimeSpan.FromSeconds(10));
+});
+```
+
+The configured meter emits `operation.duration.threshold.count` (`Counter<long>`, unit `{operation}`): one increment per operation per threshold, with integer `sli.latency.threshold_ms` and `sli.latency.result = within | exceeded`. Equality is within. Thresholds must be distinct, positive whole milliseconds and are snapshotted at construction; none are enabled by default.
+
+The counter retains SLI, API-version, abort, and custom dimensions, but omits HTTP status, HTTP method, and the abort-exception diagnostic. Timing does not determine success: a fast failure is still a failure. See the [threshold SLO recipes](docs/usage-reference.md#threshold-latency-objectives) for eligibility rules, no-data handling, and Azure delta-counter queries. In Azure, sum the counter's `AppMetrics.Sum` increments over the window, not its exported rows or `ItemCount`.
+
+### Aborts and availability
+
+Abort-first availability can miss slow dependency outages when the caller gives up before the server fails. Pair availability with a successful-and-fast latency objective that explicitly includes slow aborts. The abort-exception diagnostic supports investigation but cannot prove an independent fault.
+
 ### Cardinality Guidance
 
 Required tags must be stable and meaningful. The library bounds `Operation` for you via the route-template resolver and the `<unrouted>` sentinel; you are responsible for `LocationId` (set once from configuration) and `CustomerResourceId` (stable tenant / subscription / resource identifier). `CustomerResourceId` may be high-cardinality when the backend is designed for it, but it must not be a per-request generated value.
@@ -231,6 +254,18 @@ The same discipline applies to `[Measure]` parameters and any custom attributes 
 
 Once the Prerequisites are done, all controllers will emit SLI information.
 The default operation name is the HTTP method plus the route template (placeholders such as `{id}` are preserved). The full resolution order is described under **Trellis.ServiceLevelIndicators.Asp** above.
+
+Change one normal-response mapping without copying the defaults:
+
+```csharp
+builder.Services.AddServiceLevelIndicator(options => options.LocationId = locationId)
+    .ClassifyHttpOutcome((context, defaultOutcome) =>
+        context.Response.StatusCode == 429 && IsCallerQuotaRejection(context)
+            ? SliOutcome.ClientError
+            : defaultOutcome);
+```
+
+`IsCallerQuotaRejection` represents application-specific limiter metadata; capacity rejection should remain `Failure`. The original one-argument replacement classifier remains supported, and the last fluent registration wins. `HttpOutcomeClassifier.ClassifyStatusCode(int)` exposes the built-in mapping. Neither callback overrides abort or escaping-exception handling.
 
 - To add API versioning as a dimension use package `Trellis.ServiceLevelIndicators.Asp.ApiVersioning` and enrich the metrics with `AddApiVersion`.
 
@@ -391,6 +426,17 @@ packages by ID rather than by link because every package installs into its own
 directory. Its build target is not included in the published SLI
 packages. Run `pwsh build/test-guidance-packages.ps1` after packing to verify
 the payload and absence of legacy consumer targets.
+
+## Provider cancellation integration
+
+The ASP.NET tests include real mid-flight `HttpClient` cancellation. Real `SqlClient` cancellation requires a dedicated SQL fixture; without `TRELLIS_SLI_SQL_CONNECTION_STRING`, those cases are explicitly skipped. On Windows with SQL Server Express LocalDB installed, run:
+
+```powershell
+dotnet restore Trellis.ServiceLevelIndicators.Asp\tests\Trellis.ServiceLevelIndicators.Asp.Tests.csproj
+pwsh -NoProfile -File build\test-sql-cancellation.ps1
+```
+
+The script creates, starts, stops, and deletes its own uniquely named LocalDB instance. It does not use or modify shared instances. The Windows CI job runs this fixture; provider dependencies are test-only. For another dedicated SQL Server, supply the environment variable and run the ASP.NET tests; the fixture needs permission to inspect `sys.dm_exec_requests` so cancellation occurs after the command is genuinely in flight.
 
 ## Related repositories
 
