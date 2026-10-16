@@ -3,7 +3,7 @@ package: Trellis.ServiceLevelIndicators
 namespaces: [Trellis.ServiceLevelIndicators]
 types: [ServiceLevelIndicator, ServiceLevelIndicatorOptions, MeasuredOperation, IEnrichmentContext, "IEnrichment<T>", ServiceLevelIndicatorMeterProviderBuilderExtensions]
 version: v10
-last_verified: 2026-06-18
+last_verified: 2026-10-15
 audience: [llm]
 ---
 
@@ -28,7 +28,26 @@ See also the `Trellis.ServiceLevelIndicators.Asp` and `Trellis.ServiceLevelIndic
 | `Operation` | Caller-supplied operation name |
 | `Outcome` | `Success`, `Failure`, `ClientError`, or `Ignored` |
 
-Additional attributes can be appended via `MeasuredOperation.AddAttribute(...)` or the `attributes` parameter of `Record`/`StartMeasuring`. Custom attributes must not reuse `CustomerResourceId`, `LocationId`, `Operation`, `Outcome`, `activity.status.code`, `http.request.method`, `http.response.status.code`, or any other attribute name already present on the measurement. Direct `Record(...)` calls emit `CustomerResourceId`, `LocationId`, `Operation`, `Outcome`, and any supplied custom attributes.
+Additional attributes can be appended via `MeasuredOperation.AddAttribute(...)` or the `attributes` parameter of `Record`/`StartMeasuring`. Custom attributes must not reuse `CustomerResourceId`, `LocationId`, `Operation`, `Outcome`, `activity.status.code`, `http.request.method`, `http.response.status.code`, `sli.request.aborted`, `sli.request.abort_exception`, `sli.latency.threshold_ms`, `sli.latency.result`, or another name already present. Direct `Record(...)` calls emit the required dimensions and supplied custom attributes.
+
+## Optional threshold counter
+
+Configure `options.LatencyThresholds.Add(TimeSpan.FromSeconds(2))` during startup. The initially empty, get-only collection accepts distinct positive whole-millisecond values, validated and snapshotted before instrument creation.
+
+| Element | Contract |
+|---|---|
+| Instrument / type / unit | `operation.duration.threshold.count` / `Counter<long>` / `{operation}` |
+| Value | One increment per operation per threshold across all `Record`, scope, helper, and HTTP paths |
+| `sli.latency.threshold_ms` | Integer milliseconds (`long`), e.g. `2000` |
+| `sli.latency.result` | `within` when recorded integer milliseconds are `<=` threshold; otherwise `exceeded` |
+| Retained tags | Required SLI dimensions plus API version, abort indicator, and custom dimensions when present |
+| Omitted tags | `http.request.method`, `http.response.status.code`, `sli.request.abort_exception` |
+
+The duration histogram keeps its original tags and unit. Both instruments use the configured meter; no threshold instrument is created when the collection is empty. Generated threshold-tag names are also rejected on direct `MeasuredOperation.Attributes` mutation.
+
+Timing is independent of outcome: a fast failure is `within` but not successful-and-fast. Select one threshold and an explicit eligibility policy for each ratio. No eligible traffic is no data; eligible traffic with zero good events is 0. The counter supports configured boundaries, not arbitrary percentiles.
+
+For a fixed meter/resource scope, `N` thresholds and `P` projected base-tag combinations add at most `2 * N * P` series; `P` includes outcome and retained optional/custom dimensions. Backend resource/instance dimensions may multiply this further. On Azure Monitor's delta-export path, sum each interval's `AppMetrics.Sum` increment over the window, not rows, `ItemCount`, latest/max, or cumulative differences. Prometheus cumulative scrapes need `increase`/`rate`.
 
 ---
 
@@ -62,7 +81,7 @@ Singleton service that creates and records SLI metrics using an OpenTelemetry `H
 
 | Signature | Description |
 |---|---|
-| `public ServiceLevelIndicator(IOptions<ServiceLevelIndicatorOptions> options)` | Validates `LocationId` and `DurationInstrumentName`, creates the default meter (`"Trellis.SLI"` + assembly version) when one isn't supplied, and creates the `operation.duration` histogram. |
+| `public ServiceLevelIndicator(IOptions<ServiceLevelIndicatorOptions> options)` | Validates `LocationId`, `DurationInstrumentName`, and thresholds; snapshots thresholds before creating instruments; uses the supplied meter or creates `"Trellis.SLI"` with the assembly version. Creates the duration histogram, diagnostic counter, and opt-in threshold counter. |
 
 **Methods**
 
@@ -101,6 +120,7 @@ Bound via `IOptions<ServiceLevelIndicatorOptions>`. `LocationId` and `DurationIn
 | `CustomerResourceId` | `string` | `"Unknown"` | Default `CustomerResourceId` tag value. Can be overridden on each call. When emitted as `Unknown`, the diagnostic counter `sli.diagnostics.unknown_customer_resource_id` is incremented. |
 | `LocationId` | `string` | `""` | **Required.** Where the service is running (e.g. `ms-loc://az/public/westus3`). Must be non-empty. |
 | `DurationInstrumentName` | `string` | `"operation.duration"` | **Required.** Histogram instrument name. Must be non-empty. |
+| `LatencyThresholds` | `IList<TimeSpan>` (get-only) | Empty | Startup-only positive, distinct, whole-millisecond thresholds. Snapshotted at construction. Enables the fixed-name threshold counter when nonempty. |
 | `ActivityStatusCodeAttributeName` | `string` | `"activity.status.code"` | Obsolete compatibility option. Activity status is no longer emitted as a metric dimension. |
 | `AutomaticallyEmitted` | `bool` | `true` | When `false`, only operations explicitly opted-in (e.g. via the `[ServiceLevelIndicator]` attribute in the ASP package) emit metrics. |
 
@@ -192,6 +212,12 @@ public interface IEnrichment<T>
 ```
 
 Strategy contract for adding attributes to a measurement context. Multiple enrichments are invoked in DI registration order.
+
+**Properties**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `EnrichOnCancellation` | `bool` (get-only) | `false` | Default interface member. ASP.NET may run opted-in enrichments after request cancellation. Only opt in for bounded, cancellation-safe metadata access without I/O; the canceled token is still passed. Existing implementations retain the default. |
 
 **Methods**
 

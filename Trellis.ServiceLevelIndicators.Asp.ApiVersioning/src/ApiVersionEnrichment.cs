@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.Http;
 public sealed class ApiVersionEnrichment
     : IEnrichment<WebEnrichmentContext>
 {
+    public bool EnrichOnCancellation => true;
+
     public ValueTask EnrichAsync(WebEnrichmentContext context, CancellationToken cancellationToken)
     {
         context.AddAttribute("http.api.version", GetApiVersion(context.HttpContext));

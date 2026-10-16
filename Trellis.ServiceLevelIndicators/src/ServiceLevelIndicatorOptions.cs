@@ -31,6 +31,14 @@ public class ServiceLevelIndicatorOptions
     public string DurationInstrumentName { get; set; } = "operation.duration";
 
     /// <summary>
+    /// Opt-in duration thresholds for <c>operation.duration.threshold.count</c>.
+    /// Configure positive, distinct, whole-millisecond values during startup.
+    /// Values are snapshotted when <see cref="ServiceLevelIndicator"/> is constructed.
+    /// An observation is within a threshold when its recorded milliseconds are less than or equal to it.
+    /// </summary>
+    public IList<TimeSpan> LatencyThresholds { get; } = new List<TimeSpan>();
+
+    /// <summary>
     /// Obsolete. Activity status is no longer emitted as a metric dimension.
     /// </summary>
     [Obsolete("Activity status is no longer emitted as a metric dimension. Use SliOutcome instead.")]

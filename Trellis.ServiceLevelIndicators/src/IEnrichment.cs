@@ -10,6 +10,14 @@ public interface IEnrichment<T>
     where T : IEnrichmentContext
 {
     /// <summary>
+    /// Whether the ASP.NET Core integration may run this enrichment after request cancellation.
+    /// Defaults to <see langword="false"/> for existing implementations.
+    /// Only opt in for bounded, cancellation-safe metadata access that does not perform I/O.
+    /// The canceled request token is still passed to <see cref="EnrichAsync"/>.
+    /// </summary>
+    bool EnrichOnCancellation => false;
+
+    /// <summary>
     /// Enriches the measurement context with additional attributes.
     /// </summary>
     /// <param name="context">The enrichment context.</param>

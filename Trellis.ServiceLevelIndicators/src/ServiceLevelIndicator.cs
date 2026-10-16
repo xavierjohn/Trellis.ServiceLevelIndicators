@@ -19,6 +19,9 @@ using Microsoft.Extensions.Options;
 /// </remarks>
 public sealed class ServiceLevelIndicator : IDisposable
 {
+    private const string ThresholdAttributeName = "sli.latency.threshold_ms";
+    private const string ThresholdResultAttributeName = "sli.latency.result";
+
     /// <summary>
     /// Default meter name used when no <see cref="Meter"/> is provided in options.
     /// </summary>
@@ -36,6 +39,8 @@ public sealed class ServiceLevelIndicator : IDisposable
 
     private readonly Histogram<long> _responseLatencyHistogram;
     private readonly Counter<long> _unknownCustomerResourceIdCounter;
+    private readonly Counter<long>? _durationThresholdCounter;
+    private readonly long[] _latencyThresholds;
     private readonly Meter _meter;
     private readonly bool _ownsMeter;
     private bool _disposed;
@@ -46,6 +51,7 @@ public sealed class ServiceLevelIndicator : IDisposable
 
         ArgumentException.ThrowIfNullOrWhiteSpace(ServiceLevelIndicatorOptions.LocationId, nameof(ServiceLevelIndicatorOptions.LocationId));
         ArgumentException.ThrowIfNullOrWhiteSpace(ServiceLevelIndicatorOptions.DurationInstrumentName, nameof(ServiceLevelIndicatorOptions.DurationInstrumentName));
+        _latencyThresholds = GetLatencyThresholds(ServiceLevelIndicatorOptions.LatencyThresholds);
 
         if (ServiceLevelIndicatorOptions.Meter == null)
         {
@@ -63,6 +69,13 @@ public sealed class ServiceLevelIndicator : IDisposable
 
         _responseLatencyHistogram = _meter.CreateHistogram<long>(ServiceLevelIndicatorOptions.DurationInstrumentName, "ms", "Duration of the operation.");
         _unknownCustomerResourceIdCounter = _meter.CreateCounter<long>("sli.diagnostics.unknown_customer_resource_id", description: "Count of SLI measurements emitted with an unknown customer resource identifier.");
+        if (_latencyThresholds.Length > 0)
+        {
+            _durationThresholdCounter = _meter.CreateCounter<long>(
+                "operation.duration.threshold.count",
+                "{operation}",
+                "Count of operations classified against configured duration thresholds.");
+        }
     }
 
     /// <summary>
@@ -142,6 +155,56 @@ public sealed class ServiceLevelIndicator : IDisposable
             tagList.Add(attributes[i]);
 
         _responseLatencyHistogram.Record(elapsedTime, tagList);
+        RecordThresholdCounts(elapsedTime, tagList);
+    }
+
+    private void RecordThresholdCounts(long elapsedTime, TagList durationTags)
+    {
+        if (_durationThresholdCounter is null || !_durationThresholdCounter.Enabled)
+            return;
+
+        var counterTags = new TagList();
+        foreach (var tag in durationTags)
+        {
+            if (tag.Key is not ("http.response.status.code" or "http.request.method" or "sli.request.abort_exception"))
+                counterTags.Add(tag);
+        }
+
+        foreach (var threshold in _latencyThresholds)
+        {
+            var thresholdTags = counterTags;
+            thresholdTags.Add(ThresholdAttributeName, threshold);
+            thresholdTags.Add(ThresholdResultAttributeName, elapsedTime <= threshold ? "within" : "exceeded");
+            _durationThresholdCounter.Add(1, thresholdTags);
+        }
+    }
+
+    private static long[] GetLatencyThresholds(IList<TimeSpan> latencyThresholds)
+    {
+        var thresholds = new long[latencyThresholds.Count];
+        var distinctThresholds = new HashSet<long>();
+        for (var i = 0; i < thresholds.Length; i++)
+        {
+            var ticks = latencyThresholds[i].Ticks;
+            if (ticks <= 0 || ticks % TimeSpan.TicksPerMillisecond != 0)
+            {
+                throw new ArgumentException(
+                    "Latency thresholds must be positive whole-millisecond durations.",
+                    nameof(latencyThresholds));
+            }
+
+            var milliseconds = ticks / TimeSpan.TicksPerMillisecond;
+            if (!distinctThresholds.Add(milliseconds))
+            {
+                throw new ArgumentException(
+                    "Latency thresholds must be distinct.",
+                    nameof(latencyThresholds));
+            }
+
+            thresholds[i] = milliseconds;
+        }
+
+        return thresholds;
     }
 
     /// <summary>
@@ -264,7 +327,11 @@ public sealed class ServiceLevelIndicator : IDisposable
             or "Outcome"
             or "activity.status.code"
             or "http.request.method"
-            or "http.response.status.code")
+            or "http.response.status.code"
+            or "sli.request.aborted"
+            or "sli.request.abort_exception"
+            or ThresholdAttributeName
+            or ThresholdResultAttributeName)
         {
             throw new ArgumentException(
                 $"'{attribute}' is a reserved Service Level Indicator attribute name and cannot be used as a custom metric attribute.",
@@ -308,12 +375,14 @@ public sealed class ServiceLevelIndicator : IDisposable
                     nameof(attributes));
             }
 
-            names ??= new HashSet<string>(attributes.Length + 3, StringComparer.Ordinal)
+            names ??= new HashSet<string>(attributes.Length + 6, StringComparer.Ordinal)
             {
                 "CustomerResourceId",
                 "LocationId",
                 "Operation",
-                "Outcome"
+                "Outcome",
+                ThresholdAttributeName,
+                ThresholdResultAttributeName
             };
 
             if (!names.Add(attributes[i].Key))

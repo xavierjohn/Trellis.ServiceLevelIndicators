@@ -105,8 +105,8 @@ try {
             $metadataReader = [System.IO.StreamReader]::new($nuspec.Open())
             try { [xml] $metadata = $metadataReader.ReadToEnd() }
             finally { $metadataReader.Dispose() }
-            if ($metadata.SelectSingleNode('//*[local-name()="dependency" and (@id="Trellis.AgentDocs.Packaging" or @id="Trellis.Core")]')) {
-                throw "$id leaks a publisher-only dependency or introduces a Core dependency."
+            if ($metadata.SelectSingleNode('//*[local-name()="dependency" and (@id="Trellis.AgentDocs.Packaging" or @id="Microsoft.Data.SqlClient" or @id="Trellis.Core")]')) {
+                throw "$id leaks a publisher/test-only dependency or introduces a Core dependency."
             }
             if ($metadata.SelectSingleNode('//*[local-name()="readme"]')?.InnerText -ne 'README.md') {
                 throw "$id must declare its packed README.md as the NuGet readme."

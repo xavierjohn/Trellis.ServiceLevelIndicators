@@ -4,6 +4,8 @@
 
 Implemented in the pre-1.0 metric contract finalization.
 
+The first-preview additions from [TFR-26/27/29](sli-feature-requests-proposal.md) are implemented locally: default-aware HTTP classification, explicit abort telemetry, cancellation-safe API-version enrichment, and opt-in threshold counting. Preview publication and consumer deployment validation remain separate rollout steps.
+
 ## Context
 
 `Trellis.ServiceLevelIndicators` is part of the Trellis AI-first .NET framework. Its role is to provide structural observability guardrails for generated and hand-written services by emitting service-level latency metrics with stable, meaningful dimensions.
@@ -33,6 +35,18 @@ The primary metric remains:
 `operation.count` is not added initially. Success-rate and availability queries should use the histogram count produced by `operation.duration`. A separate count metric may be reconsidered only if backend constraints prove histogram count is insufficient.
 
 `operation.duration` is a custom Trellis SLI metric, not an OpenTelemetry semantic-convention metric. The unit is intentionally milliseconds (`ms`), even though OpenTelemetry HTTP duration semantic conventions use seconds.
+
+### Optional threshold counter
+
+`ServiceLevelIndicatorOptions.LatencyThresholds` enables `operation.duration.threshold.count` (`Counter<long>`, unit `{operation}`), with no thresholds enabled by default. Positive, distinct, whole-millisecond values are validated and snapshotted before instrument creation.
+
+Each operation increments once per threshold, tagged with integer `sli.latency.threshold_ms` and `sli.latency.result = within | exceeded`; equality with the recorded millisecond duration is within. All recording paths share the central emission logic. Timing is independent of outcome.
+
+The counter retains required dimensions, API version, the abort indicator, and custom dimensions when present. It omits `http.response.status.code`, `http.request.method`, and `sli.request.abort_exception`. It does not add threshold tags to the duration histogram.
+
+For a fixed meter/resource scope, `N` thresholds and `P` projected base-tag combinations add at most `2 * N * P` series. Backend resource/instance dimensions may multiply this further. Per-operation threshold overrides remain deferred.
+
+For Azure Monitor delta exports, sum counter `AppMetrics.Sum` interval increments over the window, not rows, `ItemCount`, latest/max, or cumulative differences. Prometheus cumulative scrapes need `increase`/`rate`. A configured threshold ratio cannot reconstruct arbitrary percentiles.
 
 ## Required dimensions
 
@@ -111,7 +125,7 @@ Outcome precedence:
 3. Middleware inference.
 4. Default `Ignored`.
 
-Unhandled exceptions escaping the measured operation are an explicit exception to precedence and force `Failure`.
+Observed exceptions follow the helper and HTTP rules below. Raw `StartMeasuring` scopes cannot detect escaping exceptions.
 
 ## ASP.NET classification defaults
 
@@ -122,8 +136,8 @@ Unhandled exceptions escaping the measured operation are an explicit exception t
 | 400, 401, 403, 404, 409, 412, 422 | `ClientError` |
 | 429 | `Failure` by default; configurable |
 | 5xx | `Failure` |
-| Client disconnect / request-aborted cancellation | `Ignored` |
-| Unhandled exception | `Failure` |
+| Observed request abort, regardless of escaping exception shape | `Ignored` |
+| Escaping exception without a request abort | `Failure` |
 
 Application/business cancellations remain configurable.
 
@@ -131,7 +145,11 @@ Application/business cancellations remain configurable.
 
 3xx responses are `Success` by default because redirects and cache-validation responses can be successful service behavior. Redirect loops should be monitored through status-code queries or classifier overrides.
 
-For exceptions, record the final `HttpContext.Response.StatusCode`. If an unhandled exception escapes and no status was set, emit `http.response.status.code = 500`.
+HTTP precedence is observed abort, then escaping exception, then normal-response classification. For an escaping exception without an abort, preserve started responses and existing status >= 500; otherwise set status 500 before headers start. Aborts never manufacture 499 or an abort-related 500.
+
+On an abort, emit `sli.request.aborted = true` and omit unsent `http.response.status.code`; preserve the actual status after headers start. Omit the abort indicator for non-aborted requests. If an exception escapes during the abort, add duration-only `sli.request.abort_exception = cancellation` for top-level `OperationCanceledException` (including derived types), otherwise `other`. Omit this diagnostic without an abort or escaping exception. It describes shape, not cause; do not walk exception trees to infer fault.
+
+Abort-first availability may hide slow dependency outages when the caller gives up before the server fails. Pair availability with a successful-and-fast latency objective including slow aborts. The exception-shape diagnostic supports investigation, not reliable standalone outage detection.
 
 ASP.NET emits these optional dimensions by default:
 
@@ -215,7 +233,7 @@ Custom meter registration remains supported. All SLI metrics and diagnostic coun
 
 ### Core recording
 
-`ServiceLevelIndicator` owns the `operation.duration` histogram and the `sli.diagnostics.unknown_customer_resource_id` counter. Both instruments use the default `Trellis.SLI` meter or the configured custom meter.
+`ServiceLevelIndicator` creates the `operation.duration` histogram, `sli.diagnostics.unknown_customer_resource_id` counter, and optional threshold counter. All use the default `Trellis.SLI` meter or the configured custom meter.
 
 Every duration recording emits:
 
@@ -242,7 +260,7 @@ Internal behavior:
 - Disposing records elapsed milliseconds.
 - Disposing records the explicit or inferred `Outcome`.
 - Raw `StartMeasuring(...)`/`Dispose()` cannot detect escaping exceptions and records the explicit/default outcome.
-- `Measure(...)`, `MeasureAsync(...)`, and ASP.NET middleware can force `Failure` when they observe an exception.
+- Core helpers infer failure for non-cancellation exceptions; HTTP middleware infers failure for escaping exceptions only without an observed request abort.
 - `Dispose()` remains idempotent.
 - `SetOutcome(...)` after disposal has no effect.
 
@@ -270,24 +288,27 @@ Middleware should:
 - resolve `Operation` from explicit metadata, route template, then uppercase `<METHOD> <unrouted>`,
 - set `CustomerResourceId` from endpoint metadata when present,
 - default missing customer resource to `Unknown`,
-- classify outcome using configured classifier first, then the default table,
-- emit `http.request.method` and `http.response.status.code` by default,
-- run enrichments before recording,
-- rethrow unhandled exceptions after recording failure semantics.
+- classify abort first, escaping exception next, then configured/default normal-response mapping,
+- emit HTTP and abort dimensions with the status-presence rules above,
+- run enrichments before recording, skipping canceled work unless it explicitly opts into bounded metadata access,
+- rethrow escaping exceptions, preserving their stack traces and abort-first outcome.
 
 ### Classifier extensibility
 
-The first implementation should provide a global HTTP outcome classifier option. Exact per-route classifier API shape is intentionally left for implementation design and can follow after the global classifier.
+Global normal-response classifier APIs:
 
-Classifier behavior:
+```csharp
+.ClassifyHttpOutcome(Func<HttpContext, SliOutcome> classifier)
+.ClassifyHttpOutcome(Func<HttpContext, SliOutcome, SliOutcome> classifier)
+```
 
-- returned `SliOutcome` wins over default status mapping,
-- no result / null falls back to default status mapping,
-- unhandled exceptions still force `Failure`.
+The first overload retains replacement semantics; the second receives the built-in outcome so callers can preserve defaults. `HttpOutcomeClassifier.ClassifyStatusCode(int)` exposes the default mapper. Last fluent registration wins. With direct options configuration, `ClassifyOutcomeWithDefault` takes precedence over `ClassifyOutcome`. Neither callback runs on an observed abort or escaping exception. Per-route APIs remain deferred.
 
 ### API versioning
 
 The API versioning package remains an enrichment package. It continues to emit `http.api.version` only when `.AddApiVersion()` is called and does not participate in outcome classification.
+
+`ApiVersionEnrichment.EnrichOnCancellation` is true, retaining already-resolved versions on aborted requests. The default interface value on `IEnrichment<T>` is false, preserving existing user-enrichment cancellation behavior. Only bounded, cancellation-safe metadata access without I/O should opt in; the canceled token is still passed. Skip individual unsafe enrichments rather than terminating the whole sequence.
 
 ## Dimension stability guardrails
 

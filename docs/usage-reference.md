@@ -24,7 +24,9 @@ These values are part of the library contract and should be treated as stable un
 | Required tag | `Operation` |
 | Required tag | `Outcome` (`Success`, `Failure`, `ClientError`, or `Ignored`) |
 
-For ASP.NET Core, the library also emits `http.request.method` and `http.response.status.code`; `http.api.version` is emitted when API version enrichment is enabled.
+For ASP.NET Core, the library also emits `http.request.method` and `http.response.status.code`; an abort before response headers start omits the status. `sli.request.aborted = true` marks observed aborts. `sli.request.abort_exception` is a duration-only exception-shape diagnostic on aborts with an escaping exception. `http.api.version` is emitted when API version enrichment is enabled, including on aborted requests.
+
+The opt-in `operation.duration.threshold.count` counter has unit `{operation}`. It leaves the duration histogram unchanged.
 
 ## Core Package
 
@@ -74,6 +76,72 @@ Direct recording is also available when you already know the elapsed time. `Reco
 ```csharp
 sli.Record("ProcessOrder", elapsedTime: 42);
 ```
+
+## Threshold Latency Objectives
+
+Configure global boundaries during startup:
+
+```csharp
+builder.Services.AddServiceLevelIndicator(options =>
+{
+    options.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
+    options.CustomerResourceId = "tenant-a";
+    options.LatencyThresholds.Add(TimeSpan.FromSeconds(2));
+    options.LatencyThresholds.Add(TimeSpan.FromSeconds(10));
+});
+```
+
+`LatencyThresholds` is a get-only collection, empty by default. Values must be distinct, positive whole milliseconds; invalid configuration fails before instrument creation. The collection is snapshotted at construction. All direct recordings, scopes, helpers, and measured HTTP requests contribute once per threshold.
+
+| Counter element | Contract |
+|---|---|
+| Instrument / type / unit | `operation.duration.threshold.count` / `Counter<long>` / `{operation}` |
+| Value | One increment per operation per configured threshold |
+| `sli.latency.threshold_ms` | Integer milliseconds, e.g. `2000` |
+| `sli.latency.result` | `within` when recorded integer milliseconds are `<=` the boundary; otherwise `exceeded` |
+| Retained dimensions | Required SLI tags, API version, abort indicator, and custom dimensions when present |
+| Omitted dimensions | `http.request.method`, `http.response.status.code`, `sli.request.abort_exception` |
+
+Select **one threshold**, one scope, and one eligibility policy for both sides of a ratio. Timing is independent of `Outcome`: a fast failure emits `within`, but is not successful-and-fast. For a fixed meter/resource scope, `N` thresholds and `P` distinct projected base-tag combinations add at most `2 * N * P` series. `P` includes outcome and retained optional/custom dimensions; backend resource/instance dimensions can multiply deployment-wide series further.
+
+### A successful-and-fast policy including slow aborts
+
+For the same service/operation/customer/version scope and selected threshold:
+
+```text
+good = count(Outcome == Success and result == within)
+eligible = count(Outcome in {Success, Failure})
+         + count(Outcome == Ignored and aborted and result == exceeded)
+compliance = good / eligible
+```
+
+Fast failures and slow successes are misses. Slow aborts are misses; fast aborts, other ignored events, and client errors are excluded. Equality is within. Zero good events with eligible traffic is 0; a zero eligible denominator is **no data**, not 100%. Exclude health and other out-of-scope operations before aggregation. This is query policy, not a new library default.
+
+### Azure Monitor delta-counter query
+
+On the Azure Monitor delta-export path, each counter's `AppMetrics.Sum` is that export interval's increment. Sum these increments across the window. Do **not** count exported rows, sum `ItemCount`, select the latest/max `Sum`, or treat `Sum` as a cumulative running total.
+
+Apply your service/resource, location, and any API-version filters before aggregation. This example selects one operation, customer, and threshold:
+
+```kusto
+AppMetrics
+| where TimeGenerated > ago(1h)
+| where Name == "operation.duration.threshold.count"
+| where tolong(Properties["sli.latency.threshold_ms"]) == 2000
+| where tostring(Properties["Operation"]) == "GET /teams/{teamId}"
+| where tostring(Properties["CustomerResourceId"]) == "team1"
+| extend Outcome = tostring(Properties["Outcome"]),
+         Timing = tostring(Properties["sli.latency.result"]),
+         Aborted = tobool(Properties["sli.request.aborted"])
+| summarize Good = sumif(Sum, Outcome == "Success" and Timing == "within"),
+            Eligible = sumif(Sum,
+                Outcome in ("Success", "Failure")
+                or (Outcome == "Ignored" and Aborted == true and Timing == "exceeded"))
+| project Good, Eligible,
+          Compliance = iff(Eligible > 0, todouble(Good) / todouble(Eligible), real(null))
+```
+
+Cumulative Prometheus counter scrapes need `increase`/`rate` semantics instead of summing raw cumulative samples. The counter gives ratios at configured boundaries, not arbitrary percentiles. A histogram-export path that drops buckets cannot reconstruct percentile distributions from sum/count/min/max.
 
 ## Custom Meter Registration
 
@@ -246,8 +314,30 @@ For ASP.NET Core:
 | `2xx`, `3xx` | `Success` |
 | `400`, `401`, `403`, `404`, `409`, `412`, `422` | `ClientError` |
 | `429`, `5xx` | `Failure` |
-| Unhandled exceptions | `Failure` |
-| Request-aborted cancellations | `Ignored` |
+| Escaping exception without an observed abort | `Failure` |
+| Observed request abort, with or without an escaping exception | `Ignored` |
+
+HTTP precedence is abort first, then escaping exception, then normal-response classification. Aborts before response headers start omit `http.response.status.code`; started responses retain the actual status. The middleware never invents 499 or an abort-related 500.
+
+For an abort with an escaping exception, `sli.request.abort_exception` is `cancellation` for a top-level `OperationCanceledException` (including `TaskCanceledException`), otherwise `other`. Wrapped cancellations and aggregate exceptions are `other`; the diagnostic does not infer cause. It is absent without an escaping exception or without an abort, and is omitted from the threshold counter.
+
+Abort-first availability can hide slow dependency outages if the caller disconnects before the failure arrives. Pair availability with an explicit latency objective such as the slow-abort policy above; the exception-shape diagnostic supports investigation, not reliable standalone outage detection.
+
+### Default-aware HTTP classification
+
+```csharp
+builder.Services.AddServiceLevelIndicator(options => options.LocationId = locationId)
+    .ClassifyHttpOutcome((context, defaultOutcome) =>
+        context.Response.StatusCode == 429 && IsCallerQuotaRejection(context)
+            ? SliOutcome.ClientError
+            : defaultOutcome);
+```
+
+The application supplies `IsCallerQuotaRejection`: actor quotas may be client errors, but service-capacity rejection should remain failure. `HttpOutcomeClassifier.ClassifyStatusCode(int)` exposes the default mapper. The one-argument overload retains replacement semantics; last fluent registration wins across overloads. With direct options configuration, `ClassifyOutcomeWithDefault` takes precedence over `ClassifyOutcome`. Callbacks apply only to normal completions, not aborts or escaping exceptions.
+
+### Cancellation-safe enrichment
+
+Ordinary `Enrich` and `EnrichAsync` callbacks remain skipped after request cancellation. An `IEnrichment<WebEnrichmentContext>` implementation may opt in with `EnrichOnCancellation => true` only for bounded, cancellation-safe metadata access without I/O. The canceled token is still passed, and skipping an unsafe enrichment does not prevent later safe enrichments. API-version enrichment opts in automatically; known route/resource metadata is also retained.
 
 ## Cardinality Guidance
 
@@ -276,7 +366,7 @@ Avoid values that can explode cardinality unless your backend is designed for th
 3. Forgetting `AddMvc()` when relying on MVC conventions and attribute-based overrides.
 4. Forgetting `.AddServiceLevelIndicator()` on Minimal API endpoints when `AutomaticallyEmitted` is `false`.
 5. Renaming `CustomerResourceId` or `LocationId` even though downstream systems depend on those exact names.
-6. Reusing reserved tag names such as `CustomerResourceId`, `LocationId`, `Operation`, `Outcome`, `activity.status.code`, `http.request.method`, or `http.response.status.code` as custom attributes.
+6. Reusing reserved tags: required SLI dimensions, `activity.status.code`, HTTP method/status, `sli.request.aborted`, `sli.request.abort_exception`, `sli.latency.threshold_ms`, or `sli.latency.result`.
 
 ## Public API Cheat Sheet
 
@@ -288,6 +378,7 @@ Core package:
 - `AddServiceLevelIndicatorInstrumentation(Meter meter)`
 - `ServiceLevelIndicator.StartMeasuring(...)`
 - `ServiceLevelIndicator.Record(...)`
+- `ServiceLevelIndicatorOptions.LatencyThresholds`
 - `ServiceLevelIndicator.CreateLocationId(...)`
 - `ServiceLevelIndicator.CreateCustomerResourceId(...)`
 
@@ -296,6 +387,7 @@ ASP.NET Core package:
 - `UseServiceLevelIndicator()`
 - `IServiceLevelIndicatorBuilder.AddMvc()`
 - `IServiceLevelIndicatorBuilder.ClassifyHttpOutcome(...)`
+- `HttpOutcomeClassifier.ClassifyStatusCode(int)`
 - `IServiceLevelIndicatorBuilder.Enrich(...)`
 - `IServiceLevelIndicatorBuilder.EnrichAsync(...)`
 - `EndpointConventionBuilder.AddServiceLevelIndicator(...)`

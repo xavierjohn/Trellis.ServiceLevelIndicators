@@ -1,9 +1,9 @@
 ---
 package: Trellis.ServiceLevelIndicators.Asp
 namespaces: [Trellis.ServiceLevelIndicators]
-types: [IServiceLevelIndicatorBuilder, ServiceLevelIndicatorCoreServiceCollectionExtensions, ServiceLevelIndicatorServiceCollectionExtensions, ServiceLevelIndicatorApplicationBuilderExtensions, EndpointBuilderExtensions, ServiceLevelIndicatorAttribute, CustomerResourceIdAttribute, MeasureAttribute, CustomerResourceIdMetadata, MeasureMetadata, WebEnrichmentContext, IServiceLevelIndicatorFeature, HttpContextExtensions]
+types: [IServiceLevelIndicatorBuilder, ServiceLevelIndicatorCoreServiceCollectionExtensions, ServiceLevelIndicatorServiceCollectionExtensions, ServiceLevelIndicatorHttpOptions, HttpOutcomeClassifier, ServiceLevelIndicatorApplicationBuilderExtensions, EndpointBuilderExtensions, ServiceLevelIndicatorAttribute, CustomerResourceIdAttribute, MeasureAttribute, CustomerResourceIdMetadata, MeasureMetadata, WebEnrichmentContext, IServiceLevelIndicatorFeature, HttpContextExtensions]
 version: v10
-last_verified: 2026-06-18
+last_verified: 2026-10-15
 audience: [llm]
 ---
 
@@ -26,9 +26,15 @@ When the middleware is registered, every measured request emits these tags on to
 | Tag | Source |
 |---|---|
 | `Operation` | HTTP method plus route template (e.g. `GET WeatherForecast` or `GET /teams/{teamId}`) — derived from `ControllerActionDescriptor.AttributeRouteInfo.Template` for MVC, or from the route pattern for Minimal APIs. Overridable via `[ServiceLevelIndicator(operation)]` or `AddServiceLevelIndicator("operation")`. |
-| `Outcome` | `Success` for 2xx/3xx, `ClientError` for common caller errors (400/401/403/404/409/412/422), `Failure` for 429/5xx and unhandled exceptions, and `Ignored` for request-aborted cancellations. |
-| `http.response.status.code` | `HttpContext.Response.StatusCode`. |
+| `Outcome` | `Success` for 2xx/3xx, `ClientError` for 400/401/403/404/409/412/422, `Failure` for 429/5xx and escaping exceptions without an abort. Observed request aborts take precedence and are `Ignored`. |
+| `http.response.status.code` | `HttpContext.Response.StatusCode`; omitted on abort before headers start, otherwise retained. |
 | `http.request.method` | `HttpContext.Request.Method`; emitted by default. |
+| `sli.request.aborted` | `true` when the request token is canceled; absent otherwise. |
+| `sli.request.abort_exception` | On abort with an escaping exception: `cancellation` for top-level `OperationCanceledException` (including `TaskCanceledException`), otherwise `other`. Absent without abort or escaping exception. |
+
+The abort diagnostic describes exception shape, not cause: wrappers and aggregates are `other` even if cancellation-related. Abort handling does not manufacture 499 or 500. **Behavior change:** an aborted request before headers start no longer emits a phantom status 200.
+
+Configure `ServiceLevelIndicatorOptions.LatencyThresholds` to enable the core `operation.duration.threshold.count` counter (`{operation}`). It retains required/API-version/abort/custom tags, but omits HTTP status, method, and the abort-exception diagnostic. No threshold tags are added to the duration histogram.
 
 ---
 
@@ -85,8 +91,44 @@ Extensions on `IServiceLevelIndicatorBuilder` for opting into MVC support and en
 | `public static IServiceLevelIndicatorBuilder AddMvc(this IServiceLevelIndicatorBuilder builder)` | `IServiceLevelIndicatorBuilder` | Registers the MVC convention so that `[CustomerResourceId]` and `[Measure]` parameter attributes contribute endpoint metadata. **Required** for any MVC controller that uses these attributes. |
 | `public static IServiceLevelIndicatorBuilder AddHttpMethod(this IServiceLevelIndicatorBuilder builder)` | `IServiceLevelIndicatorBuilder` | No-op compatibility method; `http.request.method` is emitted by default. |
 | `public static IServiceLevelIndicatorBuilder ClassifyHttpOutcome(this IServiceLevelIndicatorBuilder builder, Func<HttpContext, SliOutcome> classifier)` | `IServiceLevelIndicatorBuilder` | Configures a global HTTP outcome classifier. The returned `SliOutcome` overrides the default status-code mapping for completed requests. |
+| `public static IServiceLevelIndicatorBuilder ClassifyHttpOutcome(this IServiceLevelIndicatorBuilder builder, Func<HttpContext, SliOutcome, SliOutcome> classifier)` | `IServiceLevelIndicatorBuilder` | Receives context and built-in status outcome for normal completion. Return the default to preserve a mapping. Abort and escaping-exception handling take precedence. |
 | `public static IServiceLevelIndicatorBuilder Enrich(this IServiceLevelIndicatorBuilder builder, Action<WebEnrichmentContext> action)` | `IServiceLevelIndicatorBuilder` | Registers a synchronous enrichment delegate. |
 | `public static IServiceLevelIndicatorBuilder EnrichAsync(this IServiceLevelIndicatorBuilder builder, Func<WebEnrichmentContext, CancellationToken, ValueTask> func)` | `IServiceLevelIndicatorBuilder` | Registers an asynchronous enrichment delegate. |
+
+Last fluent classifier registration wins across both overloads.
+
+---
+
+### ServiceLevelIndicatorHttpOptions
+
+```csharp
+public sealed class ServiceLevelIndicatorHttpOptions
+```
+
+| Property | Type | Description |
+|---|---|---|
+| `ClassifyOutcome` | `Func<HttpContext, SliOutcome>?` | Existing replacement classifier for normal completion. |
+| `ClassifyOutcomeWithDefault` | `Func<HttpContext, SliOutcome, SliOutcome>?` | Context plus default outcome. Takes precedence if both properties are set directly. Fluent overloads clear the other property. |
+
+Neither callback runs on observed request aborts or escaping exceptions.
+
+### HttpOutcomeClassifier
+
+```csharp
+public static class HttpOutcomeClassifier
+```
+
+`public static SliOutcome ClassifyStatusCode(int statusCode)` exposes the built-in mapping: 200-399 success; 400/401/403/404/409/412/422 client error; 429 and codes >= 500 failure; otherwise ignored. It maps status only, not abort or exception facts.
+
+```csharp
+builder.Services.AddServiceLevelIndicator(o => o.LocationId = locationId)
+    .ClassifyHttpOutcome((context, defaultOutcome) =>
+        context.Response.StatusCode == 429 && IsCallerQuotaRejection(context)
+            ? SliOutcome.ClientError
+            : defaultOutcome);
+```
+
+`IsCallerQuotaRejection` is application-specific. Caller quotas may be client errors; service-capacity rejections should remain failures.
 
 ---
 
@@ -289,11 +331,15 @@ The `ServiceLevelIndicatorMiddleware` (registered by `UseServiceLevelIndicator()
 3. Collects `MeasureMetadata` route values into measurement attributes.
 4. Starts a `MeasuredOperation` and attaches an `IServiceLevelIndicatorFeature` to `HttpContext.Features`.
 5. Optionally overrides the customer id from a `CustomerResourceIdMetadata`-tagged route value.
-6. Invokes the next middleware. On unhandled exceptions, sets status to 500 (when not started) and rethrows.
-7. In `finally`, sets `Outcome`, `http.request.method`, and `http.response.status.code`, then runs all registered `IEnrichment<WebEnrichmentContext>` enrichments. Enrichment exceptions are caught and logged.
+6. Invokes the next middleware. On an escaping exception without a request abort, sets status to 500 if headers have not started and status is below 500, then rethrows.
+7. In `finally`, classifies abort first, then escaping exception, then normal response; adds HTTP/abort tags as described above. Runs enrichments in registration order, skipping those without `EnrichOnCancellation` after request cancellation. Enrichment exceptions are caught and logged.
 8. Disposes the `MeasuredOperation` (which records the metric) and removes the feature.
 
 Throws `InvalidOperationException` if a second instance of the middleware tries to attach an SLI feature to the same request.
+
+`Enrich` and `EnrichAsync` delegates do not opt into cancellation. Custom `IEnrichment<WebEnrichmentContext>` implementations may set `EnrichOnCancellation => true` only for bounded, cancellation-safe metadata access without I/O. Skipped enrichments do not stop later safe ones. The API-version integration opts in, retaining resolved versions on aborted requests.
+
+Genuine unmatched routes are not measured. Abort-first availability can miss slow dependency outages when callers disconnect before failure arrives; pair availability with a successful-and-fast latency objective that includes slow aborts. The diagnostic is not a reliable standalone outage detector.
 
 ---
 

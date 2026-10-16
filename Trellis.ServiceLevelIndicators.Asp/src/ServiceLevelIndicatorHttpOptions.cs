@@ -8,7 +8,17 @@ using Microsoft.AspNetCore.Http;
 public sealed class ServiceLevelIndicatorHttpOptions
 {
     /// <summary>
-    /// Optional classifier that maps the completed HTTP request to an SLI outcome.
+    /// Optional replacement classifier for normally completed HTTP requests.
+    /// Abort and escaping-exception handling take precedence.
+    /// Used only when <see cref="ClassifyOutcomeWithDefault"/> is not set.
     /// </summary>
     public Func<HttpContext, SliOutcome>? ClassifyOutcome { get; set; }
+
+    /// <summary>
+    /// Optional classifier receiving the HTTP context and built-in status-code outcome.
+    /// Applies only to normally completed requests; abort and escaping-exception handling take precedence.
+    /// Takes precedence over <see cref="ClassifyOutcome"/> if both properties are set directly.
+    /// The fluent registration overloads clear the other property, so the last registration wins.
+    /// </summary>
+    public Func<HttpContext, SliOutcome, SliOutcome>? ClassifyOutcomeWithDefault { get; set; }
 }

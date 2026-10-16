@@ -10,6 +10,8 @@
   <ItemGroup>
     <Using Include="FluentAssertions" />
     <Using Include="Xunit" />
+    <Using Include="Trellis.ServiceLevelIndicators.Testing" />
+    <Compile Include="$(MSBuildThisFileDirectory)MetricCapture.cs" />
   </ItemGroup>
 
   <ItemGroup>

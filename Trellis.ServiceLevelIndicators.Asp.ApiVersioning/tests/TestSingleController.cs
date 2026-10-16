@@ -10,4 +10,11 @@ public class TestSingleController : ControllerBase
 {
     [HttpGet]
     public IActionResult Get() => Ok("Hello World!");
+
+    [HttpGet("abort/{id}")]
+    public IActionResult Abort([CustomerResourceId] string id)
+    {
+        HttpContext.Abort();
+        throw new OperationCanceledException(id, HttpContext.RequestAborted);
+    }
 }

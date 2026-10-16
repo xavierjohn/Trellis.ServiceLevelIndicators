@@ -465,7 +465,8 @@ public class ServiceLevelIndicatorAspTests : IDisposable
             new("LocationId", "ms-loc://az/public/West US 3"),
             new("Operation", "GET Test/request_aborted"),
             new("Outcome", "Ignored"),
-            new("http.response.status.code", 200),
+            new("sli.request.aborted", true),
+            new("sli.request.abort_exception", "cancellation"),
         };
 
         ValidateMetrics(expectedTags);
