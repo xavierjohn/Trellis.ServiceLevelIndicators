@@ -72,6 +72,7 @@ internal sealed class GeneratorShutdown(CancellationTokenSource cancellation, Te
 internal static class ScenarioRunner
 {
     private const int MaximumInFlightRequests = 32;
+    private static readonly TimeSpan ReadinessTimeout = TimeSpan.FromSeconds(30);
 
     private static readonly Phase[] Phases =
     [
@@ -94,7 +95,10 @@ internal static class ScenarioRunner
         await run.ConfigureAwait(
             ConfigureAwaitOptions.ContinueOnCapturedContext | ConfigureAwaitOptions.SuppressThrowing);
 
-        if (cancellationToken.IsCancellationRequested)
+        if (run.IsCompletedSuccessfully)
+            return 0;
+
+        if (run.Exception is null && cancellationToken.IsCancellationRequested)
         {
             output.WriteLine("Scenario stopped.");
             return 0;
@@ -157,7 +161,7 @@ internal static class ScenarioRunner
         CancellationToken cancellationToken)
     {
         using var timeout = waitForReady
-            ? new CancellationTokenSource(TimeSpan.FromSeconds(30), timeProvider)
+            ? new CancellationTokenSource(ReadinessTimeout, timeProvider)
             : null;
         using var readiness = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken, timeout?.Token ?? CancellationToken.None);
@@ -190,7 +194,7 @@ internal static class ScenarioRunner
         catch (OperationCanceledException ex) when (
             !cancellationToken.IsCancellationRequested && readiness.IsCancellationRequested)
         {
-            throw new HttpRequestException("Demo readiness did not succeed within 30 seconds.", ex);
+            throw new HttpRequestException($"Demo readiness did not succeed within {ReadinessTimeout.TotalSeconds:0} seconds.", ex);
         }
     }
 
