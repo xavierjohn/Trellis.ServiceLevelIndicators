@@ -4,10 +4,24 @@ using System.Net;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using SliProductionDemo.Controllers;
 using Trellis.ServiceLevelIndicators;
 
 public sealed class DemoScenarioTests
 {
+    [Theory]
+    [InlineData(new[] { 25, 35, 45, 55 })]
+    [InlineData(new[] { 45, 60, 75, 90 })]
+    [InlineData(new[] { 550, 700, 850, 1_000 })]
+    [InlineData(new[] { 25, 35, 45 })]
+    [InlineData(new[] { 35, 50, 65 })]
+    [InlineData(new[] { 450, 600, 750 })]
+    public void Delay_jitter_stays_within_the_requested_palette(int[] values)
+    {
+        for (var i = 0; i < 1_000; i++)
+            values.Should().Contain(ProjectsController.NextDelay(values));
+    }
+
     [Theory]
     [InlineData("healthy", HttpStatusCode.OK, "Success")]
     [InlineData("slow", HttpStatusCode.OK, "Success")]

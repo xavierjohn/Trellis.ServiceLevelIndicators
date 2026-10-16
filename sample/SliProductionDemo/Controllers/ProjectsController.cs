@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using Trellis.ServiceLevelIndicators;
 
 /// <summary>
-/// Deterministic Project Tracker endpoints for exploring service level indicators.
+/// Project Tracker endpoints with repeatable operating modes and bounded latency jitter.
 /// </summary>
 [ApiController]
 [Route("api/projects")]
@@ -13,7 +13,6 @@ public sealed class ProjectsController : ControllerBase
 {
     internal const string UnknownProjectId = "project-unknown";
     private static readonly string[] KnownProjects = ["project-blue", "project-green", "project-red"];
-    private static int requestNumber;
 
     /// <summary>
     /// Returns one project using a consistently fast path.
@@ -83,9 +82,5 @@ public sealed class ProjectsController : ControllerBase
         return NotFound(new { projectId, error = "Project not found." });
     }
 
-    private static int NextDelay(params int[] values)
-    {
-        var index = (Interlocked.Increment(ref requestNumber) - 1) % values.Length;
-        return values[index];
-    }
+    internal static int NextDelay(params int[] values) => values[Random.Shared.Next(values.Length)];
 }

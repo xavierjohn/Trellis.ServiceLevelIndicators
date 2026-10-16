@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="..\..\build\InstrumentationDiagnosticsCapture.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\GenerateSli\GenerateSli.csproj" />

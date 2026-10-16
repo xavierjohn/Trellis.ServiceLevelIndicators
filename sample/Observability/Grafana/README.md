@@ -64,7 +64,7 @@ Each phase lasts approximately 30 seconds. The five-phase cycle takes roughly tw
 | Capacity pressure | Some red sync requests return fast 429s; healthy red traffic continues | Red's availability falls while latency can remain within 250 ms. |
 | Recovery | Fast 200 responses across all three projects | Both SLIs recover before the next cycle. |
 
-Reads continue throughout. Every phase also retains healthy sync requests for every project. The generator uses a target rate of 12 requests/second, not an exact throughput guarantee or a load benchmark.
+Reads continue throughout. Every phase also retains healthy sync requests for every project. Operating modes and affected projects are repeatable; the API independently selects each request's delay from that mode's fixed palette. The generator schedules against elapsed time for a target rate of 12 requests/second, not an exact throughput guarantee or a load benchmark.
 
 To see the current phase and HTTP response counts:
 
@@ -73,6 +73,8 @@ docker compose --profile demo logs -f demo-traffic
 ```
 
 Ctrl+C exits the log viewer; it does not stop the running demo.
+
+In continuous mode, request transport failures and timeouts are logged immediately and counted separately as `transport-failures` and `timeouts` in phase summaries. The generator keeps running and resumes successful traffic when the API recovers. These client-side counts do not fabricate server SLI observations; use outside-in checks to detect an unreachable service.
 
 ### What the two SLIs mean
 
@@ -132,7 +134,8 @@ The running services restart after an unexpected exit. Stopping them with Compos
 ## Troubleshooting
 
 - **A port is already in use:** stop an earlier copy of the stack or a locally running sample API. The demo uses localhost ports 3000, 4317, 4318, 5199, 9090, and 9464.
-- **No metrics after startup:** check `docker compose --profile demo ps` and `docker compose --profile demo logs demo-api demo-traffic otel-collector`. The generator waits up to 30 seconds for `/health`, logs readiness failures, and exits nonzero on transport failure. Compose restarts it; network failures are never fabricated as service outcomes.
+- **No metrics after startup:** check `docker compose --profile demo ps` and `docker compose --profile demo logs demo-api demo-traffic otel-collector`. The generator waits up to 30 seconds for `/health`. If readiness still fails, it exits nonzero and Compose restarts it.
+- **The API restarts during a run:** continuous traffic logs and counts transport failures and timeouts without exiting. Successful requests resume when the API is reachable again; no generator restart is needed.
 - **No data after changing filters:** select `SyncProject` and one of the three known projects, or reset customer/location/outcome filters to **All**. Check that `demo-traffic` is running and keep a recent time range.
 - **The first build fails to download dependencies:** confirm Docker can reach Microsoft's container registry and NuGet.org.
 
@@ -160,6 +163,6 @@ dotnet run --project ..\..\GenerateSli\GenerateSli.csproj -- `
   --wait-for-ready
 ```
 
-Omit `--continuous` for a single five-phase run. Ctrl+C stops either local process gracefully. Stop both before running `docker compose down`.
+Omit `--continuous` for a single five-phase run; request transport failures and timeouts still exit nonzero in this mode. Invalid options print a concise error and usage with exit code 2. Ctrl+C stops either local process gracefully. Stop both before running `docker compose down`.
 
 The [focused Minimal API and API-versioned examples](../../../docs/usage-reference.md#running-the-focused-examples) can reuse this stack and already configure the 250 ms threshold. Their `Api.http` files contain example requests; this traffic generator targets only the continuous demo's Project Tracker API. The dashboard aggregates matching SLI dimensions across services, so stop the focused examples when exploring the continuous demo in isolation.

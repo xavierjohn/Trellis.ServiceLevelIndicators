@@ -1,8 +1,21 @@
 ﻿using System.Collections.Concurrent;
-using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 
-var options = GeneratorOptions.Parse(args);
+GeneratorOptions options;
+try
+{
+    options = GeneratorOptions.Parse(args);
+}
+catch (ArgumentException ex)
+{
+    Console.Error.WriteLine($"Invalid arguments: {ex.Message}");
+    Console.Error.WriteLine(
+        "Usage: GenerateSli [--base-url URL] [--phase-seconds N] [--requests-per-second N] " +
+        "[--continuous] [--wait-for-ready]");
+    return 2;
+}
+
 using var cancellation = new CancellationTokenSource();
 ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
 {
@@ -44,7 +57,7 @@ catch (HttpRequestException ex)
         $"Start SliProductionDemo, check --base-url, and try again. {ex.Message}");
     return 1;
 }
-catch (TaskCanceledException ex)
+catch (OperationCanceledException ex)
 {
     Console.Error.WriteLine(
         $"Scenario stopped: an HTTP request to {client.BaseAddress} timed out. {ex.Message}");
@@ -73,9 +86,12 @@ internal static class ScenarioRunner
         GeneratorOptions options,
         TextWriter output,
         TextWriter error,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeProvider? timeProvider = null)
     {
-        await EnsureReadyAsync(client, options.WaitForReady, error, cancellationToken);
+        timeProvider ??= TimeProvider.System;
+        error = TextWriter.Synchronized(error);
+        await EnsureReadyAsync(client, options.WaitForReady, error, timeProvider, cancellationToken);
 
         long sequence = 0;
         long cycle = 0;
@@ -86,7 +102,8 @@ internal static class ScenarioRunner
             foreach (var phase in Phases)
             {
                 await RunPhaseAsync(
-                    client, phase, options, () => Interlocked.Increment(ref sequence), output, cancellationToken);
+                    client, phase, options, () => Interlocked.Increment(ref sequence),
+                    output, error, timeProvider, cancellationToken);
             }
         }
         while (options.Continuous);
@@ -95,11 +112,17 @@ internal static class ScenarioRunner
     }
 
     private static async Task EnsureReadyAsync(
-        HttpClient client, bool waitForReady, TextWriter error, CancellationToken cancellationToken)
+        HttpClient client,
+        bool waitForReady,
+        TextWriter error,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
     {
-        using var readiness = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (waitForReady)
-            readiness.CancelAfter(TimeSpan.FromSeconds(30));
+        using var timeout = waitForReady
+            ? new CancellationTokenSource(TimeSpan.FromSeconds(30), timeProvider)
+            : null;
+        using var readiness = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, timeout?.Token ?? CancellationToken.None);
 
         try
         {
@@ -114,12 +137,16 @@ internal static class ScenarioRunner
                     throw new HttpRequestException(
                         $"Demo readiness failed: GET /health returned HTTP {(int)response.StatusCode}.");
                 }
-                catch (HttpRequestException ex) when (waitForReady)
+                catch (HttpRequestException ex) when (waitForReady && !readiness.IsCancellationRequested)
                 {
                     error.WriteLine($"Waiting for SliProductionDemo: {ex.Message}");
                 }
+                catch (OperationCanceledException) when (waitForReady && !readiness.IsCancellationRequested)
+                {
+                    error.WriteLine("Waiting for SliProductionDemo: GET /health timed out.");
+                }
 
-                await Task.Delay(TimeSpan.FromSeconds(1), readiness.Token);
+                await Task.Delay(TimeSpan.FromSeconds(1), timeProvider, readiness.Token);
             }
         }
         catch (OperationCanceledException ex) when (
@@ -135,24 +162,31 @@ internal static class ScenarioRunner
         GeneratorOptions options,
         Func<long> nextSequence,
         TextWriter output,
+        TextWriter error,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
-        var statusCounts = new ConcurrentDictionary<int, int>();
+        var requestCounts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
         var pending = new List<Task>();
         var duration = TimeSpan.FromSeconds(options.PhaseSeconds);
-        var interval = TimeSpan.FromSeconds(1d / options.RequestsPerSecond);
-        var stopwatch = Stopwatch.StartNew();
+        var started = timeProvider.GetTimestamp();
+        long scheduled = 0;
 
         output.WriteLine();
-        output.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss}] {phase.Name}");
+        output.WriteLine($"[{timeProvider.GetLocalNow():HH:mm:ss}] {phase.Name}");
 
         try
         {
-            while (stopwatch.Elapsed < duration)
+            while (timeProvider.GetElapsedTime(started) < duration)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                pending.Add(SendRequestAsync(client, phase.Kind, nextSequence(), statusCounts, cancellationToken));
-                await Task.Delay(interval, cancellationToken);
+                pending.Add(SendRequestAsync(
+                    client, phase.Kind, nextSequence(), options.Continuous, requestCounts, error, cancellationToken));
+
+                var nextRequest = TimeSpan.FromSeconds(++scheduled / (double)options.RequestsPerSecond);
+                var delay = nextRequest - timeProvider.GetElapsedTime(started);
+                if (delay > TimeSpan.Zero)
+                    await Task.Delay(delay, timeProvider, cancellationToken);
             }
         }
         finally
@@ -162,20 +196,36 @@ internal static class ScenarioRunner
 
         var summary = string.Join(
             ", ",
-            statusCounts.OrderBy(pair => pair.Key).Select(pair => $"{pair.Key}={pair.Value}"));
-        output.WriteLine($"[{DateTimeOffset.Now:HH:mm:ss}] {phase.Name} complete: {summary}");
+            requestCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key}={pair.Value}"));
+        output.WriteLine($"[{timeProvider.GetLocalNow():HH:mm:ss}] {phase.Name} complete: {summary}");
     }
 
     private static async Task SendRequestAsync(
         HttpClient client,
         ScenarioPhase phase,
         long requestNumber,
-        ConcurrentDictionary<int, int> statusCounts,
+        bool continuous,
+        ConcurrentDictionary<string, int> requestCounts,
+        TextWriter error,
         CancellationToken cancellationToken)
     {
         using var request = ScenarioTraffic.CreateRequest(phase, requestNumber);
-        using var response = await client.SendAsync(request, cancellationToken);
-        statusCounts.AddOrUpdate((int)response.StatusCode, 1, (_, count) => count + 1);
+        try
+        {
+            using var response = await client.SendAsync(request, cancellationToken);
+            var status = ((int)response.StatusCode).ToString(CultureInfo.InvariantCulture);
+            requestCounts.AddOrUpdate(status, 1, static (_, count) => count + 1);
+        }
+        catch (HttpRequestException ex) when (continuous && !cancellationToken.IsCancellationRequested)
+        {
+            requestCounts.AddOrUpdate("transport-failures", 1, static (_, count) => count + 1);
+            error.WriteLine($"Request {request.RequestUri} failed: {ex.Message} Continuing traffic.");
+        }
+        catch (OperationCanceledException ex) when (continuous && !cancellationToken.IsCancellationRequested)
+        {
+            requestCounts.AddOrUpdate("timeouts", 1, static (_, count) => count + 1);
+            error.WriteLine($"Request {request.RequestUri} timed out: {ex.Message} Continuing traffic.");
+        }
     }
 }
 
@@ -254,7 +304,7 @@ internal sealed record GeneratorOptions(
 
     private static string ReadValue(string[] args, ref int index)
     {
-        if (++index >= args.Length)
+        if (++index >= args.Length || args[index].StartsWith("--", StringComparison.Ordinal))
             throw new ArgumentException($"Missing value for '{args[index - 1]}'.");
 
         return args[index];

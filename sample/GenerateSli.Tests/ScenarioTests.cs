@@ -1,6 +1,7 @@
 ﻿namespace GenerateSli.Tests;
 
 using System.Net;
+using Microsoft.Extensions.Time.Testing;
 
 public sealed class ScenarioTests
 {
@@ -30,6 +31,19 @@ public sealed class ScenarioTests
     {
         var act = () => GeneratorOptions.Parse([option, value]);
         act.Should().Throw<ArgumentException>();
+    }
+
+    [Theory]
+    [InlineData("--base-url")]
+    [InlineData("--phase-seconds")]
+    [InlineData("--requests-per-second")]
+    public void Value_options_require_a_value_instead_of_consuming_the_next_flag(string option)
+    {
+        var missing = () => GeneratorOptions.Parse([option]);
+        var nextFlag = () => GeneratorOptions.Parse([option, "--continuous"]);
+
+        missing.Should().Throw<ArgumentException>().WithMessage($"Missing value for '{option}'.");
+        nextFlag.Should().Throw<ArgumentException>().WithMessage($"Missing value for '{option}'.");
     }
 
     [Theory]
@@ -92,9 +106,12 @@ public sealed class ScenarioTests
         using var client = CreateClient(_ => new(HttpStatusCode.OK));
         using var output = new StringWriter();
         using var error = new StringWriter();
+        var time = new FakeTimeProvider();
 
-        await ScenarioRunner.RunAsync(
-            client, new(client.BaseAddress!, 1, 2), output, error, TestContext.Current.CancellationToken);
+        await AdvanceUntilCompleteAsync(
+            ScenarioRunner.RunAsync(
+                client, new(client.BaseAddress!, 1, 2), output, error, TestContext.Current.CancellationToken, time),
+            time);
 
         output.ToString().Should().Contain("Cycle 1").And.NotContain("Cycle 2").And.Contain("Scenario complete.");
         error.ToString().Should().BeEmpty();
@@ -104,16 +121,137 @@ public sealed class ScenarioTests
     public async Task Continuous_mode_starts_another_cycle_and_honors_cancellation()
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        cancellation.CancelAfter(TimeSpan.FromSeconds(30));
         using var client = CreateClient(_ => new(HttpStatusCode.OK));
         using var output = new CycleCancellingWriter(cancellation, "Cycle 2");
         using var error = new StringWriter();
+        var time = new FakeTimeProvider();
 
-        var act = () => ScenarioRunner.RunAsync(
-            client, new(client.BaseAddress!, 1, 2, Continuous: true), output, error, cancellation.Token);
+        var act = () => AdvanceUntilCompleteAsync(
+            ScenarioRunner.RunAsync(
+                client, new(client.BaseAddress!, 1, 2, Continuous: true), output, error, cancellation.Token, time),
+            time);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         output.ToString().Should().Contain("Cycle 1").And.Contain("Cycle 2").And.NotContain("Scenario complete.");
+        error.ToString().Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(false, "transport-failures", "failed")]
+    [InlineData(true, "timeouts", "timed out")]
+    public async Task Continuous_mode_reports_transient_failures_immediately_and_recovers(
+        bool timeout, string countName, string diagnostic)
+    {
+        var requests = 0;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var client = CreateClient(request =>
+        {
+            if (request.RequestUri!.AbsolutePath != "/health" && ++requests == 1)
+            {
+                if (timeout)
+                    throw new TaskCanceledException("Simulated request timeout.");
+
+                throw new HttpRequestException("Simulated API restart.");
+            }
+
+            return new(HttpStatusCode.OK);
+        });
+        using var output = new CycleCancellingWriter(cancellation, "Cycle 2");
+        using var error = new StringWriter();
+        var time = new FakeTimeProvider();
+
+        var run = ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 1, 2, Continuous: true), output, error, cancellation.Token, time);
+
+        run.IsCompleted.Should().BeFalse();
+        error.ToString().Should().Contain(diagnostic).And.Contain("Continuing traffic.");
+
+        var act = () => AdvanceUntilCompleteAsync(run, time);
+        await act.Should().ThrowAsync<OperationCanceledException>();
+
+        requests.Should().BeGreaterThan(1);
+        output.ToString().Should().Contain($"{countName}=1").And.Contain("200=").And.Contain("Cycle 2");
+        output.ToString().Should().NotContain(timeout ? "transport-failures=" : "timeouts=");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Finite_mode_still_propagates_transport_failures_and_timeouts(bool timeout)
+    {
+        using var client = CreateClient(request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/health")
+                return new(HttpStatusCode.OK);
+
+            if (timeout)
+                throw new TaskCanceledException("Simulated request timeout.");
+
+            throw new HttpRequestException("Simulated API restart.");
+        });
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var time = new FakeTimeProvider();
+
+        var act = () => AdvanceUntilCompleteAsync(
+            ScenarioRunner.RunAsync(
+                client, new(client.BaseAddress!, 1, 2), output, error, TestContext.Current.CancellationToken, time),
+            time);
+
+        await act.Should().ThrowAsync<Exception>()
+            .Where(ex => timeout ? ex is OperationCanceledException : ex is HttpRequestException);
+        output.ToString().Should().NotContain("Scenario complete.");
+        error.ToString().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Continuous_mode_does_not_treat_shutdown_as_a_request_timeout()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var client = CreateClient(request =>
+        {
+            if (request.RequestUri!.AbsolutePath != "/health")
+            {
+                cancellation.Cancel();
+                cancellation.Token.ThrowIfCancellationRequested();
+            }
+
+            return new(HttpStatusCode.OK);
+        });
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var time = new FakeTimeProvider();
+
+        var act = () => ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 1, 2, Continuous: true), output, error, cancellation.Token, time);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        output.ToString().Should().NotContain("timeouts=").And.NotContain("transport-failures=");
+        error.ToString().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Request_pacing_accounts_for_synchronous_send_overhead()
+    {
+        var time = new FakeTimeProvider();
+        var requests = 0;
+        using var client = CreateClient(request =>
+        {
+            if (request.RequestUri!.AbsolutePath != "/health")
+            {
+                requests++;
+                time.Advance(TimeSpan.FromMilliseconds(100));
+            }
+
+            return new(HttpStatusCode.OK);
+        });
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        await ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 1, 10), output, error, TestContext.Current.CancellationToken, time);
+
+        requests.Should().Be(50, "each of five one-second phases should schedule ten requests");
         error.ToString().Should().BeEmpty();
     }
 
@@ -129,13 +267,62 @@ public sealed class ScenarioTests
         });
         using var output = new CycleCancellingWriter(cancellation, "Cycle 1");
         using var error = new StringWriter();
+        var time = new FakeTimeProvider();
 
-        var act = () => ScenarioRunner.RunAsync(
-            client, new(client.BaseAddress!, 1, 2, WaitForReady: true), output, error, cancellation.Token);
+        var act = () => AdvanceUntilCompleteAsync(
+            ScenarioRunner.RunAsync(
+                client, new(client.BaseAddress!, 1, 2, WaitForReady: true), output, error, cancellation.Token, time),
+            time);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
         healthChecks.Should().Be(3);
         error.ToString().Should().Contain("Waiting for SliProductionDemo").And.Contain("503");
+    }
+
+    [Fact]
+    public async Task Container_startup_retries_a_readiness_request_timeout()
+    {
+        var healthChecks = 0;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var client = CreateClient(request =>
+        {
+            request.RequestUri!.AbsolutePath.Should().Be("/health");
+            if (++healthChecks == 1)
+                throw new TaskCanceledException("Simulated readiness timeout.");
+
+            return new(HttpStatusCode.OK);
+        });
+        using var output = new CycleCancellingWriter(cancellation, "Cycle 1");
+        using var error = new StringWriter();
+        var time = new FakeTimeProvider();
+
+        var act = () => AdvanceUntilCompleteAsync(
+            ScenarioRunner.RunAsync(
+                client, new(client.BaseAddress!, 1, 2, WaitForReady: true), output, error, cancellation.Token, time),
+            time);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        healthChecks.Should().Be(2);
+        error.ToString().Should().Contain("GET /health timed out.");
+    }
+
+    [Fact]
+    public async Task Container_startup_has_a_bounded_readiness_deadline()
+    {
+        using var client = CreateClient(_ => new(HttpStatusCode.ServiceUnavailable));
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var time = new FakeTimeProvider();
+
+        var act = () => AdvanceUntilCompleteAsync(
+            ScenarioRunner.RunAsync(
+                client, new(client.BaseAddress!, 1, 2, WaitForReady: true),
+                output, error, TestContext.Current.CancellationToken, time),
+            time);
+
+        await act.Should().ThrowAsync<HttpRequestException>().WithMessage("*within 30 seconds*");
+        output.ToString().Should().BeEmpty();
+        error.ToString().Should().Contain("Waiting for SliProductionDemo");
     }
 
     [Fact]
@@ -154,6 +341,18 @@ public sealed class ScenarioTests
 
         await act.Should().ThrowAsync<HttpRequestException>().WithMessage("*503*");
         output.ToString().Should().BeEmpty();
+    }
+
+    private static async Task AdvanceUntilCompleteAsync(Task run, FakeTimeProvider time)
+    {
+        for (var i = 0; i < 6_000 && !run.IsCompleted; i++)
+        {
+            time.Advance(TimeSpan.FromMilliseconds(10));
+            await Task.Yield();
+        }
+
+        run.IsCompleted.Should().BeTrue("the scenario should finish within one virtual minute");
+        await run;
     }
 
     private static HttpClient CreateClient(Func<HttpRequestMessage, HttpResponseMessage> respond) =>
