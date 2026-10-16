@@ -36,7 +36,7 @@ The command starts five services:
 | `prometheus` | Scrapes and stores the exported metrics |
 | `grafana` | Provisioned dashboard at http://localhost:3000 |
 
-Compose starts `demo-traffic` only after the API's HTTP `/health` probe succeeds. The probe shares the API's route constant and reads the same host configuration, including `ASPNETCORE_URLS`, `ASPNETCORE_HTTP_PORTS`, command-line `--urls`, and `Kestrel:Endpoints:*:Url`. Explicit Kestrel endpoints take precedence unless `preferHostingUrls` selects configured hosting addresses. The probe accepts extra host arguments; if you change the API's command-line binding, pass the same arguments to its probe. This HTTP-only demo uses the existing .NET runtime, not an extra curl dependency. Probes run every five seconds during startup and every 30 seconds afterward.
+Compose starts `demo-traffic` only after the API's HTTP `/health` probe succeeds. The probe receives an explicit URL; it never starts a host or tries to interpret Kestrel configuration. The `SLI_DEMO_PORT` environment variable defaults to `8080` and supplies the API binding, probe URL, published-port target, and generator URL together. Set it before running Compose to change the internal port; the public API address remains http://localhost:5199. Probes use the existing .NET runtime, not an extra curl dependency, and run every five seconds during startup and every 30 seconds afterward.
 
 The Docker `demo` profile is optional: plain `docker compose up -d` still starts only the observability stack for use with other samples. All published ports are bound to loopback. Grafana permits anonymous admin access for this local demo; do not expose this configuration as a production deployment.
 
@@ -101,7 +101,9 @@ Timing includes real processing and scheduling, so startup warm-up and local mac
 
 ## Connect the dashboard to the code
 
-The demo uses three stable project IDs: `project-blue`, `project-green`, and `project-red`. Unknown IDs return 404 under the fixed `project-unknown` dimension, never the arbitrary rejected ID. `/health` is explicitly excluded from SLI measurement.
+The demo uses three stable project IDs: `project-blue`, `project-green`, and `project-red`. Unknown IDs return 404 under the library's fixed `Unknown` dimension, never the arbitrary rejected ID. These requests also increment the unknown-customer diagnostic counter. `/health` is explicitly excluded from SLI measurement.
+
+The default workload uses only known projects, so the **Unknown customer diagnostics** panel normally has no activity. To exercise it, send `GET http://localhost:5199/api/projects/missing-project` twice, at least five seconds apart so Prometheus can observe a counter increase. The requests remain `ClientError` operations and are excluded from both SLO populations.
 
 | Source | What to look for |
 |---|---|
@@ -161,14 +163,14 @@ $env:ASPNETCORE_URLS = "http://localhost:5199"
 dotnet run --no-launch-profile --project ..\..\SliProductionDemo\SliProductionDemo.csproj
 ```
 
-To check the same API with an explicit command-line binding:
+To check the same API, pass its reachable health URL explicitly:
 
 ```powershell
 dotnet run --no-launch-profile --project ..\..\SliProductionDemo\SliProductionDemo.csproj -- `
-  --health-check --urls http://localhost:5199
+  --health-check http://localhost:5199/health
 ```
 
-Probe mode never starts another web server. It needs the same environment, configuration files, and binding arguments as the running API; it cannot infer another process's command line. Programmatically added Kestrel listeners, Unix sockets, dynamic port `0`, and HTTPS-only listeners are outside this demo probe's scope.
+Probe mode accepts only `--health-check <URL>` and never loads host configuration. If you customize Kestrel, point the probe at a reachable HTTP or HTTPS listener instead of passing host arguments. HTTPS uses normal certificate validation. A successful response exits 0; HTTP failures, connection errors, and timeouts exit 1; invalid probe arguments exit 2.
 
 Traffic:
 
@@ -182,6 +184,8 @@ dotnet run --project ..\..\GenerateSli\GenerateSli.csproj -- `
 ```
 
 Omit `--continuous` for a single five-phase run. Its first request transport failure or timeout stops further sends, cancels/drains outstanding requests, and exits with code 1. Requested shutdown takes precedence over request errors while draining. Secondary cleanup failures are reported without replacing the initiating failure; unexpected request errors also produce a concise diagnostic and exit code 1. Invalid options print a concise error and usage with exit code 2.
+
+Numeric arguments accept digits only: `--requests-per-second` is 1-1000 and `--phase-seconds` is 1-3600. Their defaults remain 12 and 30; continuous mode can repeat indefinitely.
 
 Ctrl+C stops either local process gracefully. A second Ctrl+C forces the generator to exit if graceful request draining is stuck; a second SIGTERM also permits termination on Linux and macOS. Windows SIGTERM cannot be canceled by .NET; use Ctrl+C for graceful native Windows shutdown. Stop both processes before running `docker compose down`.
 

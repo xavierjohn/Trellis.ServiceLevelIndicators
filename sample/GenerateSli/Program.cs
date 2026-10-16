@@ -12,17 +12,20 @@ catch (ArgumentException ex)
 {
     Console.Error.WriteLine($"Invalid arguments: {ex.Message}");
     Console.Error.WriteLine(
-        "Usage: GenerateSli [--base-url URL] [--phase-seconds N] [--requests-per-second N] " +
+        "Usage: GenerateSli [--base-url URL] " +
+        $"[--phase-seconds 1-{GeneratorOptions.MaximumPhaseSeconds}] " +
+        $"[--requests-per-second 1-{GeneratorOptions.MaximumRequestsPerSecond}] " +
         "[--continuous] [--wait-for-ready]");
     return 2;
 }
 
 using var cancellation = new CancellationTokenSource();
-var shutdown = new GeneratorShutdown(cancellation);
-ConsoleCancelEventHandler cancelHandler = (_, eventArgs) => eventArgs.Cancel = shutdown.RequestCancellation();
+var shutdown = new GeneratorShutdown(cancellation, Console.Error);
+ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+    shutdown.RequestCancellation(suppress => eventArgs.Cancel = suppress);
 Console.CancelKeyPress += cancelHandler;
 using var termination = PosixSignalRegistration.Create(
-    PosixSignal.SIGTERM, context => context.Cancel = shutdown.RequestCancellation());
+    PosixSignal.SIGTERM, context => shutdown.RequestCancellation(suppress => context.Cancel = suppress));
 
 using var client = new HttpClient
 {
@@ -43,17 +46,26 @@ finally
     Console.CancelKeyPress -= cancelHandler;
 }
 
-internal sealed class GeneratorShutdown(CancellationTokenSource cancellation)
+internal sealed class GeneratorShutdown(CancellationTokenSource cancellation, TextWriter error)
 {
     private int requested;
 
-    public bool RequestCancellation()
+    public void RequestCancellation(Action<bool> setSuppression)
     {
-        if (Interlocked.Exchange(ref requested, 1) != 0)
-            return false;
+        var firstSignal = Interlocked.Exchange(ref requested, 1) == 0;
+        setSuppression(firstSignal);
+        if (!firstSignal)
+            return;
 
-        cancellation.Cancel();
-        return true;
+        try
+        {
+            cancellation.Cancel();
+        }
+        catch (AggregateException ex)
+        {
+            foreach (var failure in ex.Flatten().InnerExceptions)
+                error.WriteLine($"Shutdown cancellation callback failed: {failure.GetType().Name}: {failure.Message}");
+        }
     }
 }
 
@@ -199,6 +211,7 @@ internal static class ScenarioRunner
         var interval = TimeSpan.FromSeconds(1d / options.RequestsPerSecond);
         var started = timeProvider.GetTimestamp();
         var nextRequest = TimeSpan.Zero;
+        Task? pacing = null;
         var reportedBackpressure = false;
         ExceptionDispatchInfo? failure = null;
 
@@ -248,11 +261,17 @@ internal static class ScenarioRunner
                 {
                     var remaining = duration - elapsed;
                     var delay = nextRequest - elapsed;
-                    await WaitForCompletionOrDelayAsync(
-                        pending, delay < remaining ? delay : remaining, timeProvider, phaseCancellation.Token);
+                    pacing ??= Task.Delay(delay < remaining ? delay : remaining, timeProvider, phaseCancellation.Token);
+                    if (pending.Count == 0)
+                        await pacing;
+                    else
+                        await Task.WhenAny(pending.Append(pacing));
+                    if (pacing.IsCompleted)
+                        pacing = null;
                     continue;
                 }
 
+                pacing = null;
                 pending.Add(SendRequestAsync(
                     client, phase.Kind, nextSequence(), options.Continuous, requestCounts, error, phaseCancellation.Token));
 
@@ -298,23 +317,6 @@ internal static class ScenarioRunner
             ", ",
             requestCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key}={pair.Value}"));
         output.WriteLine($"[{timeProvider.GetLocalNow():HH:mm:ss}] {phase.Name} complete: {summary}");
-    }
-
-    private static async Task WaitForCompletionOrDelayAsync(
-        List<Task> pending, TimeSpan delay, TimeProvider timeProvider, CancellationToken cancellationToken)
-    {
-        using var wait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var deadline = Task.Delay(delay, timeProvider, wait.Token);
-        try
-        {
-            var completed = await Task.WhenAny(pending.Append(deadline));
-            if (completed == deadline)
-                await deadline;
-        }
-        finally
-        {
-            await wait.CancelAsync();
-        }
     }
 
     private static async Task SendRequestAsync(
@@ -383,6 +385,9 @@ internal static class ScenarioTraffic
 internal sealed record GeneratorOptions(
     Uri BaseAddress, int PhaseSeconds, int RequestsPerSecond, bool Continuous = false, bool WaitForReady = false)
 {
+    public const int MaximumPhaseSeconds = 3_600;
+    public const int MaximumRequestsPerSecond = 1_000;
+
     public static GeneratorOptions Parse(string[] args)
     {
         var baseUrl = "http://localhost:5199/";
@@ -399,10 +404,10 @@ internal sealed record GeneratorOptions(
                     baseUrl = ReadValue(args, ref i);
                     break;
                 case "--phase-seconds":
-                    phaseSeconds = ParsePositiveInt("--phase-seconds", ReadValue(args, ref i));
+                    phaseSeconds = ParsePositiveInt("--phase-seconds", ReadValue(args, ref i), MaximumPhaseSeconds);
                     break;
                 case "--requests-per-second":
-                    requestsPerSecond = ParsePositiveInt("--requests-per-second", ReadValue(args, ref i));
+                    requestsPerSecond = ParsePositiveInt("--requests-per-second", ReadValue(args, ref i), MaximumRequestsPerSecond);
                     break;
                 case "--continuous":
                     continuous = true;
@@ -433,10 +438,10 @@ internal sealed record GeneratorOptions(
         return args[index];
     }
 
-    private static int ParsePositiveInt(string name, string value) =>
-        int.TryParse(value, out var parsed) && parsed > 0
+    private static int ParsePositiveInt(string name, string value, int maximum) =>
+        int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && parsed > 0 && parsed <= maximum
             ? parsed
-            : throw new ArgumentException($"{name} must be a positive integer.");
+            : throw new ArgumentException($"{name} must contain only digits and be between 1 and {maximum}.");
 }
 
 internal sealed record Phase(string Name, ScenarioPhase Kind);

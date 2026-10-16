@@ -11,7 +11,6 @@ using Trellis.ServiceLevelIndicators;
 [Produces("application/json")]
 public sealed class ProjectsController : ControllerBase
 {
-    internal const string UnknownProjectId = "project-unknown";
     private static readonly string[] KnownProjects = ["project-blue", "project-green", "project-red"];
     private static readonly int[] ReadDelays = [25, 35, 45, 55];
     private static readonly Dictionary<string, SyncMode> SyncModes = new(StringComparer.Ordinal)
@@ -64,7 +63,7 @@ public sealed class ProjectsController : ControllerBase
     private NotFoundObjectResult ProjectNotFound(string projectId)
     {
         if (HttpContext.TryGetMeasuredOperation(out var measuredOperation))
-            measuredOperation.CustomerResourceId = UnknownProjectId;
+            measuredOperation.CustomerResourceId = ServiceLevelIndicator.UnknownCustomerResourceId;
 
         return NotFound(new { projectId, error = "Project not found." });
     }

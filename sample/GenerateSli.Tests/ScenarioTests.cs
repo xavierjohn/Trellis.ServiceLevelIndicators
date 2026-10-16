@@ -37,6 +37,48 @@ public sealed class ScenarioTests
     }
 
     [Theory]
+    [InlineData("+1")]
+    [InlineData(" 1")]
+    [InlineData("1 ")]
+    [InlineData("\t1")]
+    [InlineData("1.0")]
+    [InlineData("1,000")]
+    public void Numeric_options_require_invariant_digits(string value)
+    {
+        foreach (var option in new[] { "--phase-seconds", "--requests-per-second" })
+        {
+            var act = () => GeneratorOptions.Parse([option, value]);
+            act.Should().Throw<ArgumentException>().WithMessage("*only digits*");
+        }
+    }
+
+    [Theory]
+    [InlineData("--phase-seconds", "3601")]
+    [InlineData("--phase-seconds", "2147483647")]
+    [InlineData("--requests-per-second", "1001")]
+    [InlineData("--requests-per-second", "2000000000")]
+    public void Numeric_options_reject_values_beyond_the_demo_limits(string option, string value)
+    {
+        var act = () => GeneratorOptions.Parse([option, value]);
+        act.Should().Throw<ArgumentException>().WithMessage("*between 1 and*");
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(30, 12)]
+    [InlineData(3600, 1000)]
+    public void Accepted_numeric_limits_keep_the_pacing_interval_positive(int phaseSeconds, int requestsPerSecond)
+    {
+        var options = GeneratorOptions.Parse(
+            ["--phase-seconds", phaseSeconds.ToString(CultureInfo.InvariantCulture),
+             "--requests-per-second", requestsPerSecond.ToString(CultureInfo.InvariantCulture)]);
+
+        options.PhaseSeconds.Should().Be(phaseSeconds);
+        options.RequestsPerSecond.Should().Be(requestsPerSecond);
+        TimeSpan.FromSeconds(1d / options.RequestsPerSecond).Ticks.Should().BeGreaterThan(0);
+    }
+
+    [Theory]
     [InlineData("--base-url")]
     [InlineData("--phase-seconds")]
     [InlineData("--requests-per-second")]
@@ -684,25 +726,71 @@ public sealed class ScenarioTests
     public void Only_the_first_stop_signal_suppresses_process_termination()
     {
         using var cancellation = new CancellationTokenSource();
-        var shutdown = new GeneratorShutdown(cancellation);
+        using var error = new StringWriter();
+        var shutdown = new GeneratorShutdown(cancellation, error);
+        var suppression = new List<bool>();
 
-        shutdown.RequestCancellation().Should().BeTrue();
+        shutdown.RequestCancellation(suppression.Add);
         cancellation.IsCancellationRequested.Should().BeTrue();
-        shutdown.RequestCancellation().Should().BeFalse();
-        shutdown.RequestCancellation().Should().BeFalse();
+        shutdown.RequestCancellation(suppression.Add);
+        shutdown.RequestCancellation(suppression.Add);
+
+        suppression.Should().Equal(true, false, false);
+        error.ToString().Should().BeEmpty();
     }
 
     [Fact]
     public async Task Concurrent_stop_signals_only_suppress_one_termination()
     {
         using var cancellation = new CancellationTokenSource();
-        var shutdown = new GeneratorShutdown(cancellation);
+        using var error = new StringWriter();
+        var shutdown = new GeneratorShutdown(cancellation, error);
+        var results = new ConcurrentBag<bool>();
 
-        var results = await Task.WhenAll(Enumerable.Range(0, 32)
-            .Select(_ => Task.Run(shutdown.RequestCancellation, TestContext.Current.CancellationToken)));
+        await Task.WhenAll(Enumerable.Range(0, 32)
+            .Select(_ => Task.Run(() => shutdown.RequestCancellation(results.Add), TestContext.Current.CancellationToken)));
 
         results.Count(suppressed => suppressed).Should().Be(1);
         cancellation.IsCancellationRequested.Should().BeTrue();
+        error.ToString().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Signal_suppression_is_set_before_cancellation_callbacks_run()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var error = new StringWriter();
+        var shutdown = new GeneratorShutdown(cancellation, error);
+        var suppressed = false;
+        bool? observedSuppression = null;
+        using var registration = cancellation.Token.Register(() => observedSuppression = suppressed);
+
+        shutdown.RequestCancellation(value => suppressed = value);
+
+        observedSuppression.Should().BeTrue();
+        error.ToString().Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Cancellation_callback_failures_are_reported_and_do_not_suppress_a_second_signal()
+    {
+        using var cancellation = new CancellationTokenSource();
+        using var error = new StringWriter();
+        var shutdown = new GeneratorShutdown(cancellation, error);
+        var suppressed = false;
+        using var registration = cancellation.Token.Register(() => throw new InvalidOperationException("Broken callback."));
+
+        var first = () => shutdown.RequestCancellation(value => suppressed = value);
+        first.Should().NotThrow();
+        suppressed.Should().BeTrue();
+        cancellation.IsCancellationRequested.Should().BeTrue();
+        error.ToString().Should().Contain("Shutdown cancellation callback failed:")
+            .And.Contain("InvalidOperationException").And.Contain("Broken callback.");
+
+        shutdown.RequestCancellation(value => suppressed = value);
+
+        suppressed.Should().BeFalse();
+        error.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries).Should().ContainSingle();
     }
 
     [Fact]
@@ -716,15 +804,18 @@ public sealed class ScenarioTests
                 : completion.Task);
         using var output = new StringWriter();
         using var error = new StringWriter();
-        var shutdown = new GeneratorShutdown(cancellation);
+        var shutdown = new GeneratorShutdown(cancellation, error);
+        var suppressed = false;
         var run = ScenarioRunner.RunConsoleAsync(
             client, new(client.BaseAddress!, 30, 10), output, error, cancellation.Token, new FakeTimeProvider());
 
         try
         {
-            shutdown.RequestCancellation().Should().BeTrue();
+            shutdown.RequestCancellation(value => suppressed = value);
+            suppressed.Should().BeTrue();
             run.IsCompleted.Should().BeFalse("the pending handler deliberately ignores cancellation");
-            shutdown.RequestCancellation().Should().BeFalse("another signal must permit immediate process termination");
+            shutdown.RequestCancellation(value => suppressed = value);
+            suppressed.Should().BeFalse("another signal must permit immediate process termination");
         }
         finally
         {

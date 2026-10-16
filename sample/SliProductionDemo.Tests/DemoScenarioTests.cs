@@ -5,7 +5,6 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using SliProductionDemo;
@@ -87,6 +86,7 @@ public sealed class DemoScenarioTests
         duration.Tags["CustomerResourceId"].Should().Be(projectId);
         duration.Tags["Operation"].Should().Be("GetProject");
         duration.Tags["Outcome"].Should().Be("Success");
+        capture.For("sli.diagnostics.unknown_customer_resource_id").Should().BeEmpty();
     }
 
     [Theory]
@@ -117,8 +117,18 @@ public sealed class DemoScenarioTests
         thresholds.Should().HaveCount(2);
         foreach (var measurement in durations.Concat(thresholds))
         {
-            measurement.Tags["CustomerResourceId"].Should().Be("project-unknown");
+            measurement.Tags["CustomerResourceId"].Should().Be(ServiceLevelIndicator.UnknownCustomerResourceId);
             measurement.Tags["Outcome"].Should().Be("ClientError");
+        }
+
+        var diagnostics = capture.For("sli.diagnostics.unknown_customer_resource_id");
+        diagnostics.Should().HaveCount(2);
+        foreach (var diagnostic in diagnostics)
+        {
+            diagnostic.Value.Should().Be(1);
+            diagnostic.Tags.Keys.Should().BeEquivalentTo("Operation", "LocationId");
+            diagnostic.Tags["Operation"].Should().Be(synchronize ? "SyncProject" : "GetProject");
+            diagnostic.Tags["LocationId"].Should().Be(ServiceLevelIndicator.CreateLocationId("public", "westus3"));
         }
     }
 
@@ -131,6 +141,8 @@ public sealed class DemoScenarioTests
 
         application.Services.GetRequiredService<IOptions<ServiceLevelIndicatorOptions>>()
             .Value.AutomaticallyEmitted.Should().BeTrue();
+        application.Services.GetRequiredService<IOptions<ServiceLevelIndicatorOptions>>()
+            .Value.CustomerResourceId.Should().Be(ServiceLevelIndicator.UnknownCustomerResourceId);
 
         using var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
 
@@ -165,121 +177,104 @@ public sealed class DemoScenarioTests
     }
 
     [Theory]
-    [InlineData("http://+:8097", "8080", "http://localhost:8097/health")]
-    [InlineData("http://*:8098", null, "http://localhost:8098/health")]
-    [InlineData("http://0.0.0.0:8099", null, "http://localhost:8099/health")]
-    [InlineData("http://[::]:8100", null, "http://localhost:8100/health")]
-    [InlineData("http://127.0.0.1:8101", null, "http://127.0.0.1:8101/health")]
-    [InlineData("http://[::1]:8101", null, "http://[::1]:8101/health")]
-    [InlineData("http://unresolvable.demo:8101", null, "http://localhost:8101/health")]
-    [InlineData("http://localhost:8102;http://+:8103", null, "http://localhost:8102/health")]
-    [InlineData("https://localhost:8443;http://+:8104", null, "http://localhost:8104/health")]
-    [InlineData(null, "8105;8106", "http://localhost:8105/health")]
-    [InlineData(null, null, "http://localhost:5000/health")]
-    public void Readiness_uses_the_configured_http_listener_and_shared_route(
-        string? urls, string? httpPorts, string expectedUri)
+    [InlineData("http://127.0.0.1:8097/health")]
+    [InlineData("https://localhost:8443/health")]
+    public async Task Readiness_checks_only_the_explicit_url(string target)
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        Uri? requested = null;
+        using var client = new HttpClient(new ProbeHandler(request =>
         {
-            [WebHostDefaults.ServerUrlsKey] = urls,
-            [WebHostDefaults.HttpPortsKey] = httpPorts,
-        }).Build();
+            request.Method.Should().Be(HttpMethod.Get);
+            requested = request.RequestUri;
+            return new(HttpStatusCode.OK);
+        }));
+        using var error = new StringWriter();
 
-        DemoReadiness.GetUri(configuration).Should().Be(new Uri(expectedUri));
+        var exitCode = await DemoReadiness.CheckAsync(
+            client, ["--health-check", target], error, TestContext.Current.CancellationToken);
+
+        exitCode.Should().Be(0);
+        requested.Should().Be(new Uri(target));
+        error.ToString().Should().BeEmpty();
     }
 
     [Theory]
-    [InlineData(null, null, false, "http://localhost:8120/health")]
-    [InlineData("http://+:8110", "8111", false, "http://localhost:8120/health")]
-    [InlineData("http://+:8110", "8111", true, "http://localhost:8110/health")]
-    [InlineData(null, "8111", true, "http://localhost:8111/health")]
-    [InlineData(null, null, true, "http://localhost:8120/health")]
-    public void Readiness_matches_Kestrel_endpoint_and_hosting_address_precedence(
-        string? urls, string? httpPorts, bool preferHostingUrls, string expectedUri)
+    [InlineData("--health-check")]
+    [InlineData("--urls http://localhost:8080 --health-check")]
+    [InlineData("--health-check http://localhost:8080/health --urls http://localhost:8080")]
+    public async Task Readiness_reports_wrong_arguments_without_sending_a_request(string arguments)
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            [WebHostDefaults.ServerUrlsKey] = urls,
-            [WebHostDefaults.HttpPortsKey] = httpPorts,
-            [WebHostDefaults.PreferHostingUrlsKey] = preferHostingUrls.ToString(),
-            ["Kestrel:Endpoints:A-Https:Url"] = "https://localhost:8443",
-            ["Kestrel:Endpoints:Z-Http:Url"] = "http://+:8120",
-        }).Build();
+        using var client = new HttpClient(new ProbeHandler(_ => throw new InvalidOperationException("Must not send.")));
+        using var error = new StringWriter();
 
-        DemoReadiness.GetUri(configuration).Should().Be(new Uri(expectedUri));
+        var exitCode = await DemoReadiness.CheckAsync(
+            client, arguments.Split(' '), error, TestContext.Current.CancellationToken);
+
+        exitCode.Should().Be(2);
+        error.ToString().Should().Contain("Usage:").And.Contain("--health-check");
     }
 
     [Theory]
-    [InlineData("--urls")]
-    [InlineData("--Kestrel:Endpoints:Http:Url")]
-    public void Readiness_uses_command_line_binding_overrides(string option)
+    [InlineData("")]
+    [InlineData("/health")]
+    [InlineData("not-a-url")]
+    [InlineData("ftp://localhost/health")]
+    [InlineData("http://+:8080/health")]
+    [InlineData("http://localhost:0/health")]
+    public async Task Readiness_rejects_invalid_targets_with_usage(string target)
     {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [WebHostDefaults.ServerUrlsKey] = "http://+:8080",
-            })
-            .AddCommandLine([option, "http://127.0.0.1:8121"])
-            .Build();
+        using var client = new HttpClient(new ProbeHandler(_ => throw new InvalidOperationException("Must not send.")));
+        using var error = new StringWriter();
 
-        DemoReadiness.GetUri(configuration).Should().Be(new Uri("http://127.0.0.1:8121/health"));
+        var exitCode = await DemoReadiness.CheckAsync(
+            client, ["--health-check", target], error, TestContext.Current.CancellationToken);
+
+        exitCode.Should().Be(2);
+        error.ToString().Should().Contain("Usage:");
     }
 
     [Theory]
-    [InlineData("urls", "https://localhost:8443")]
-    [InlineData("https_ports", "8443")]
-    [InlineData("Kestrel:Endpoints:Https:Url", "https://localhost:8443")]
-    [InlineData("urls", "http://localhost:0")]
-    [InlineData("urls", "http://localhost:70000")]
-    [InlineData("urls", "http://localhost:8080/base")]
-    public void Readiness_rejects_a_configuration_without_a_probeable_http_listener(string key, string value)
+    [InlineData(HttpStatusCode.OK, 0)]
+    [InlineData(HttpStatusCode.NoContent, 0)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, 1)]
+    public async Task Readiness_reports_the_target_http_status(HttpStatusCode status, int expectedExitCode)
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            [key] = value,
-        }).Build();
+        using var client = new HttpClient(new ProbeHandler(_ => new(status)));
+        using var error = new StringWriter();
 
-        var act = () => DemoReadiness.GetUri(configuration);
-        act.Should().Throw<InvalidOperationException>().WithMessage("*requires an HTTP listener*");
+        var exitCode = await DemoReadiness.CheckAsync(
+            client, ["--health-check", "http://localhost:8080/health"], error, TestContext.Current.CancellationToken);
+
+        exitCode.Should().Be(expectedExitCode);
+        if (expectedExitCode != 0)
+            error.ToString().Should().Contain($"HTTP {(int)status}");
+        else
+            error.ToString().Should().BeEmpty();
     }
 
     [Theory]
-    [InlineData("http://+:not-a-port")]
-    [InlineData("http://localhost:invalid")]
-    public void Readiness_does_not_hide_malformed_ports_as_wildcard_hostnames(string urls)
+    [InlineData(false, "failed")]
+    [InlineData(true, "timed out")]
+    public async Task Readiness_reports_transport_failures_without_an_unhandled_exception(bool timeout, string diagnostic)
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            [WebHostDefaults.ServerUrlsKey] = urls,
-        }).Build();
+        Exception failure = timeout ? new TaskCanceledException("Timeout.") : new HttpRequestException("Unavailable.");
+        using var client = new HttpClient(new ProbeHandler(_ => throw failure));
+        using var error = new StringWriter();
 
-        var act = () => DemoReadiness.GetUri(configuration);
-        act.Should().Throw<FormatException>();
+        var exitCode = await DemoReadiness.CheckAsync(
+            client, ["--health-check", "http://localhost:8080/health"], error, TestContext.Current.CancellationToken);
+
+        exitCode.Should().Be(1);
+        error.ToString().Should().Contain(diagnostic).And.NotContain("Unhandled exception");
     }
 
-    [Fact]
-    public void Readiness_does_not_probe_a_hosting_url_overridden_by_https_only_endpoints()
+    private sealed class ProbeHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            [WebHostDefaults.ServerUrlsKey] = "http://+:8080",
-            ["Kestrel:Endpoints:Https:Url"] = "https://localhost:8443",
-        }).Build();
-
-        var act = () => DemoReadiness.GetUri(configuration);
-        act.Should().Throw<InvalidOperationException>().WithMessage("*requires an HTTP listener*");
-    }
-
-    [Fact]
-    public void Readiness_reports_a_missing_Kestrel_endpoint_url()
-    {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Kestrel:Endpoints:Http:Protocols"] = "Http1",
-        }).Build();
-
-        var act = () => DemoReadiness.GetUri(configuration);
-        act.Should().Throw<InvalidOperationException>().WithMessage("*'Http'*Url*");
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(respond(request));
+        }
     }
 
     private sealed class DemoApplicationFactory(MetricCapture capture) : WebApplicationFactory<Program>
