@@ -4,7 +4,6 @@
     <WarnOnPackingNonPackableProject>false</WarnOnPackingNonPackableProject>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Azure.Core" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />

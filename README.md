@@ -1,494 +1,186 @@
 ﻿# Trellis.ServiceLevelIndicators
 
+> **Your service can look healthy while one customer's operations are failing.**
+
+**Measure customer impact, not just HTTP response times.** Trellis SLI emits business-operation latency metrics in milliseconds, with the customer resource, location, operation, and outcome attached. Build availability and latency objectives that reveal problems aggregate request metrics can hide.
+
 [![Build](https://github.com/xavierjohn/Trellis.ServiceLevelIndicators/actions/workflows/build.yml/badge.svg)](https://github.com/xavierjohn/Trellis.ServiceLevelIndicators/actions/workflows/build.yml)
-[![NuGet: Trellis.ServiceLevelIndicators](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.svg?label=Trellis.ServiceLevelIndicators)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators)
-[![NuGet: Asp](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.Asp.svg?label=Trellis.ServiceLevelIndicators.Asp)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp)
-[![NuGet: ApiVersioning](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.Asp.ApiVersioning.svg?label=Trellis.ServiceLevelIndicators.Asp.ApiVersioning)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp.ApiVersioning)
-[![NuGet Downloads](https://img.shields.io/nuget/dt/Trellis.ServiceLevelIndicators.svg)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![NuGet: Core](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.svg?label=Core)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators)
+[![NuGet: ASP.NET Core](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.Asp.svg?label=ASP.NET%20Core)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp)
+[![NuGet: API Versioning](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.Asp.ApiVersioning.svg?label=API%20Versioning)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp.ApiVersioning)
 [![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/download)
-[![C#](https://img.shields.io/badge/C%23-14.0-blue.svg)](https://docs.microsoft.com/en-us/dotnet/csharp/)
-[![GitHub Stars](https://img.shields.io/github/stars/xavierjohn/Trellis.ServiceLevelIndicators?style=social)](https://github.com/xavierjohn/Trellis.ServiceLevelIndicators/stargazers)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> Latency SLI library for .NET: emits operation-duration histograms via `System.Diagnostics.Metrics` + OpenTelemetry, with rich dimensions (CustomerResourceId, LocationId, Operation, Outcome) and ASP.NET Core + API-versioning integrations.
+**[Try the live demo](#try-the-live-demo)** | [Get started](#installation) | [Focused examples](#focused-examples) | [Integration guide](docs/usage-reference.md) | [Watch the video](https://youtu.be/jpReYDjaEH0)
 
-`Trellis.ServiceLevelIndicators` is a .NET library for emitting service-level latency metrics in milliseconds using the standard [System.Diagnostics.Metrics](https://learn.microsoft.com/dotnet/api/system.diagnostics.metrics) and OpenTelemetry pipeline.
+![Live Grafana dashboard: project-red loses availability and latency compliance while project-blue and project-green stay healthy.](assets/sli-live-demo.png)
 
-It is designed for teams that need more than generic request timing. The library helps measure meaningful operations, attach service-specific dimensions such as customer, location, operation name, and SLI outcome, and build SLO or SLA-oriented dashboards and alerts from those metrics.
+*Real metrics from the included demo, with simulated incidents. Compare the service-wide cards with the per-project charts: one struggling project tells a different story.*
 
-Service level indicators (SLIs) are metrics used to track how a service is performing against expected reliability and responsiveness goals. Common examples include availability, response time, throughput, and error rate. This library focuses on latency SLIs so you can consistently measure operation duration across background work, ASP.NET Core APIs, and versioned endpoints.
+## Why Trellis SLI?
+
+| The problem | What becomes visible |
+|---|---|
+| **Averages hide customer-specific incidents.** | Break down operations by `CustomerResourceId`, `LocationId`, and `Operation` instead of treating every request as the same experience. |
+| **200 OK does not mean fast enough.** | Opt into exact within/exceeded latency-threshold counts. Measure compliance directly rather than estimating it from p95. |
+| **A fast failure is still a failure.** | Track availability separately from latency. A fast 429 can meet the latency objective while failing availability. |
+| **Caller mistakes look like service outages.** | Distinguish `ClientError` from `Failure`, keeping caller errors visible without including them in the default SLO population. |
+
+Use the same SLI model in **ASP.NET Core MVC, Minimal APIs, versioned APIs, workers, and console apps**. Built on [`System.Diagnostics.Metrics`](https://learn.microsoft.com/dotnet/api/system.diagnostics.metrics) and **OpenTelemetry**; use your existing metrics backend.
+
+## Try the live demo
+
+**One command. Docker only. No local .NET SDK required.** With Docker running Linux containers, start the complete demo from the repository root:
+
+```powershell
+docker compose -f .\sample\Observability\Grafana\docker-compose.yml --profile demo up --build -d
+```
+
+Open the [live SLI dashboard](http://localhost:3000/d/trellis-sli?var-operation=SyncProject). The Project Tracker API, continuous traffic generator, Collector, Prometheus, and Grafana all run locally.
+
+Healthy background traffic continues while slowdowns, failures, caller errors, throttling, and recovery repeat automatically. Start with **SyncProject / All projects**, then isolate **project-red** and compare it with the healthy projects.
+
+**[Follow the guided walkthrough](sample/Observability/Grafana/README.md)** for what to investigate, how the SLIs are calculated, source-code pointers, and shutdown instructions. This is a local learning environment, not a production deployment.
 
 ### Video guide
 
+<details>
+<summary>Watch the complete NuGet guide</summary>
+
 [![Trellis Service Level Indicators for .NET: Complete NuGet Guide](assets/sli-video-thumbnail.png)](https://youtu.be/jpReYDjaEH0)
 
+</details>
 
-## Service Level Indicator Library
+## What gets measured
 
-**Trellis.ServiceLevelIndicators** emits operation latency metrics in milliseconds so service owners can monitor performance over time using dimensions that matter to their system.
-The metrics are emitted via the standard [.NET Meter Class](https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.metrics.meter).
+The default meter is `Trellis.SLI`. Its `operation.duration` histogram records elapsed time in **milliseconds**, with these stable dimensions:
 
-By default, a meter named `Trellis.SLI` with instrument name `operation.duration` is added to the service metrics. If you configure `ServiceLevelIndicatorOptions.Meter`, metrics are emitted from that meter instead. Metrics recorded with `StartMeasuring(...)` emit the following [attributes](https://opentelemetry.io/docs/specs/otel/common/#attribute).
+| Dimension | Meaning |
+|---|---|
+| `CustomerResourceId` | The **target resource**, such as the project, tenant, or subscription being operated on. Not the caller's identity or a request ID. |
+| `LocationId` | Where the service runs, set once from deployment configuration. |
+| `Operation` | A named business operation or HTTP method plus route template. Route values are never substituted into the default operation name. |
+| `Outcome` | `Success`, `Failure`, `ClientError`, or `Ignored`. |
 
-- CustomerResourceId - The **target resource** of the operation — the noun in the URL path being read or modified, normalized to a stable identifier (tenant, subscription, account, work item). **NOT** the caller, **NOT** a per-request GUID, **NOT** a user ID or email. Example: for `GET /teams/{teamId}` called by user `xa1` for team `team1`, the value is `"team1"`, not `"xa1"`. See the [ASP.NET Core package README](Trellis.ServiceLevelIndicators.Asp/src/README.md#what-customerresourceid-is--and-what-it-is-not) for the full mental model.
-- LocationId - The location where the service is running, such as public cloud in the West US 3 region. [Azure Core](https://learn.microsoft.com/en-us/dotnet/api/azure.core.azurelocation?view=azure-dotnet)
-- Operation - The name of the operation.
-- Outcome - The SLI outcome. Exact values are `Success`, `Failure`, `ClientError`, and `Ignored`. Default success-rate queries should use `Success / (Success + Failure)`.
+ASP.NET Core adds HTTP method/status and request-abort diagnostics. The API-versioning package adds `http.api.version`.
 
-**Trellis.ServiceLevelIndicators.Asp** adds the following dimensions.
+Built-in `http.server.request.duration` metrics remain useful: their unit is seconds, not a limit on timing precision, and they include status/error diagnostics. Trellis adds an explicit SLI outcome policy and service-specific dimensions, with the same model available outside HTTP.
 
-- Operation - For ASP.NET endpoints, the operation name is the HTTP method plus the route template, resolved in this order: (1) `[ServiceLevelIndicator(Operation = "...")]` attribute or `.AddServiceLevelIndicator("op")` override, (2) MVC `AttributeRouteInfo.Template`, (3) the endpoint's `RouteEndpoint.RoutePattern.RawText` (Minimal APIs / conventional routing). Route placeholders such as `{id}` are preserved, never substituted with the concrete request value. A trailing slash is trimmed (the literal root `/` is kept), so a route group's root and its slashless form share one series. If no bounded template is available, the middleware emits the sentinel `"<METHOD> <unrouted>"` and logs a warning — see that value in your metrics as a signal to add a route template.
-- Outcome - By default, 2xx and 3xx responses are `Success`, common caller errors such as 400/401/403/404/409/412/422 are `ClientError`, and 429 and 5xx responses are `Failure`. An observed request abort takes precedence over escaping exceptions and remains `Ignored`.
-- http.response.status.code - The HTTP status code. Omitted on an aborted request when response headers have not started; otherwise the actual status is retained.
-- http.request.method - The http request method (GET, POST, etc).
-- sli.request.aborted - `true` when the request-abort token is canceled; absent otherwise.
-- sli.request.abort_exception - Duration-only diagnostic on an aborted request with an escaping exception: `cancellation` for a top-level `OperationCanceledException`, `other` for every other exception shape. This describes shape, not cause.
+For default availability, use **`Success / (Success + Failure)`**. Common caller errors are `ClientError`; 429 and 5xx are `Failure`. Observed request aborts are `Ignored`. For latency, opt into `operation.duration.threshold.count` to count operations within/exceeding configured millisecond boundaries; the duration histogram remains unchanged.
 
-Difference between ServiceLevelIndicator and http.server.request.duration
+Latency thresholds classify elapsed time; they do not enforce timeouts or determine success/failure.
 
-|             | ServiceLevelIndicator | http.server.request.duration
-| ----------  | ------- | ------
-| Resolution  | milliseconds       | seconds
-| Customer    | CustomerResourceId | N/A
-| Error check | `Outcome` and HTTP status code | HTTP status code
-
-This makes the library useful when generic HTTP server metrics are not enough, especially for multi-tenant services, APIs with customer-specific objectives, or workloads that need the same SLI model outside HTTP request handling.
-
-**Trellis.ServiceLevelIndicators.Asp.ApiVersioning** adds the following dimensions.
-- http.api.version - The resolved API version when used in conjunction with the [API Versioning package](https://github.com/dotnet/aspnet-api-versioning), including on aborted requests. The value can be a version string, `Neutral`, `Unspecified`, or an empty string for invalid or ambiguous requests.
-
-
-## NuGet Packages
-
-**Source-tree additions after `10.0.0-preview.37`:** result selectors, endpoint exclusions, and the instrumentation failure policy below require a package containing these changes; they are not in preview.37.
-
-- **Trellis.ServiceLevelIndicators**
-
-  This library can be used to emit SLI for all .net core applications, where each operation is measured.
-
-  [![NuGet Package](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.svg)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators)
-
-- **Trellis.ServiceLevelIndicators.Asp**
-
-  For measuring SLI for ASP.NET Core applications use this library that will automatically measure each API operation.
-
-  [![NuGet Package](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.Asp.svg)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp)
-  
-- **Trellis.ServiceLevelIndicators.Asp.ApiVersioning**
-
-  If [API Versioning package](https://github.com/dotnet/aspnet-api-versioning) is used, this library will add the API version as a metric dimension.
-
-  [![NuGet Package](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.Asp.ApiVersioning.svg)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp.ApiVersioning)
+Choose the eligible population deliberately. The demo treats availability and latency as separate objectives; a successful-and-fast objective can instead require both. See [status semantics](docs/usage-reference.md#status-semantics) and [latency SLO recipes](docs/usage-reference.md#threshold-latency-objectives), including slow-abort and no-data handling.
 
 ## Installation
 
-```shell
-dotnet add package Trellis.ServiceLevelIndicators
-```
+Requires **.NET 10**. Choose the package for your application:
 
-For a concise package-selection and integration guide, see [docs/usage-reference.md](docs/usage-reference.md).
+| Application | Package |
+|---|---|
+| Console, worker, or shared library | [`Trellis.ServiceLevelIndicators`](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators) |
+| ASP.NET Core MVC or Minimal APIs | [`Trellis.ServiceLevelIndicators.Asp`](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp) |
+| ASP.NET Core with Asp.Versioning | [`Trellis.ServiceLevelIndicators.Asp.ApiVersioning`](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp.ApiVersioning) |
 
-API references:
+The ASP.NET Core package includes core; the API-versioning package includes ASP.NET Core integration.
 
-- [`docs/api_reference/trellis-api-sli.md`](docs/api_reference/trellis-api-sli.md) — `Trellis.ServiceLevelIndicators` (core)
-- [`docs/api_reference/trellis-api-sli-asp.md`](docs/api_reference/trellis-api-sli-asp.md) — `Trellis.ServiceLevelIndicators.Asp` (middleware + attributes)
-- [`docs/api_reference/trellis-api-sli-apiversioning.md`](docs/api_reference/trellis-api-sli-apiversioning.md) — `Trellis.ServiceLevelIndicators.Asp.ApiVersioning`
+**Source-tree availability:** result selectors, endpoint exclusions, and the instrumentation failure policy were added after `10.0.0-preview.37`. Use a package containing those changes for those APIs. The Docker demo builds the current source directly.
 
-For ASP.NET Core:
+### A complete Minimal API setup
 
-```shell
-dotnet add package Trellis.ServiceLevelIndicators.Asp
-```
-
-For API Versioning support:
+From an ASP.NET Core project, install SLI and the OpenTelemetry hosting/exporter packages:
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators.Asp.ApiVersioning
+dotnet add package Trellis.ServiceLevelIndicators.Asp --prerelease
+dotnet add package OpenTelemetry.Extensions.Hosting
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
 ```
 
-## Usage for ASP.NET Core MVC
+Replace `Program.cs` with:
 
-1. Register SLI with open telemetry by calling `AddServiceLevelIndicatorInstrumentation`.
+```csharp
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using Trellis.ServiceLevelIndicators;
 
-   Example:
+var builder = WebApplication.CreateBuilder(args);
 
-    ```csharp
-    builder.Services.AddOpenTelemetry()
-        .ConfigureResource(configureResource)
-        .WithMetrics(builder =>
-        {
-            builder.AddServiceLevelIndicatorInstrumentation();
-            builder.AddOtlpExporter();
-        });
-    ```
-
-   If you configure `ServiceLevelIndicatorOptions.Meter` with a custom meter, register that same meter with OpenTelemetry:
-
-    ```csharp
-    var sliMeter = new Meter("MyCompany.ServiceLevelIndicator");
-
-    builder.Services.AddOpenTelemetry()
-        .ConfigureResource(configureResource)
-        .WithMetrics(metrics =>
-        {
-            metrics.AddServiceLevelIndicatorInstrumentation(sliMeter);
-            metrics.AddOtlpExporter();
-        });
-
-    builder.Services.AddServiceLevelIndicator(options =>
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService(builder.Environment.ApplicationName))
+    .WithMetrics(metrics =>
     {
-        options.Meter = sliMeter;
-        options.LocationId = ServiceLevelIndicator.CreateLocationId("public", AzureLocation.WestUS3.Name);
+        metrics.AddServiceLevelIndicatorInstrumentation();
+        metrics.AddOtlpExporter();
     });
-    ```
 
-2. Add ServiceLevelIndicator into the dependency injection. `AddMvc()` is required for overrides present in MVC SLI attributes to take effect.
-
-   Example:
-
-    ```csharp
-    builder.Services.AddServiceLevelIndicator(options =>
-    {
-        options.LocationId = ServiceLevelIndicator.CreateLocationId("public", AzureLocation.WestUS3.Name);
-    })
-    .AddMvc();
-    ```
-
-3. Add the middleware to the pipeline.
-
-    ```csharp
-    app.UseServiceLevelIndicator();
-    ```
-
-## Usage for Minimal APIs
-
-1. Register SLI with open telemetry by calling `AddServiceLevelIndicatorInstrumentation`.
-
-   Example:
-
-    ```csharp
-    builder.Services.AddOpenTelemetry()
-        .ConfigureResource(configureResource)
-        .WithMetrics(builder =>
-        {
-            builder.AddServiceLevelIndicatorInstrumentation();
-            builder.AddOtlpExporter();
-        });
-    ```
-
-2. Add ServiceLevelIndicator into the dependency injection. By default, SLI is emitted for every routed endpoint when the middleware is present. Set `AutomaticallyEmitted = false` if you want Minimal APIs to opt in endpoint-by-endpoint with `.AddServiceLevelIndicator()`.
-
-   Example:
-
-    ```csharp
-    builder.Services.AddServiceLevelIndicator(options =>
-    {
-        options.LocationId = ServiceLevelIndicator.CreateLocationId("public", AzureLocation.WestUS3.Name);
-    });
-    ```
-
-3. Add the middleware to the ASP.NET Core pipeline.
-
-   Example:
-
-    ```csharp
-    app.UseServiceLevelIndicator();
-    ```
-
-4. Optional: when `AutomaticallyEmitted = false`, add `AddServiceLevelIndicator()` to each route mapping that should emit SLI metrics.
-
-   Example:
-
-    ```csharp
-    app.MapGet("/hello", () => "Hello World!")
-       .AddServiceLevelIndicator();
-    ```
-
-## Usage for Background Jobs
-
-You can measure a block of code by wrapping it in a `using` clause of `MeasuredOperation`.
-
-Example:
-
-```csharp
-void MeasureCodeBlock(ServiceLevelIndicator serviceLevelIndicator)
-{
-    using var measuredOperation = serviceLevelIndicator.StartMeasuring("OperationName");
-    // Do Work.
-    measuredOperation.SetOutcome(SliOutcome.Success);
-}
-```
-
-Classify failures returned as values without changing the returned value:
-
-```csharp
-var validation = sli.Measure(
-    "ValidateOrder",
-    () => ValidateOrder(order),
-    result => result.IsValid ? SliOutcome.Success : SliOutcome.ClientError);
-
-var saved = await sli.MeasureAsync(
-    "SaveOrder",
-    () => SaveOrderAsync(order, cancellationToken),
-    result => result.IsSuccess ? SliOutcome.Success : SliOutcome.Failure);
-```
-
-The functions and result types are application-defined; the core has no Trellis Results dependency. Selectors run once after successful completion, including for null results. The original result is returned. Action or selector exceptions propagate and record `Failure`; `OperationCanceledException` records `Ignored`. Undefined selector outcomes are rejected and record `Failure`. Existing overloads without a selector retain their success-on-completion behavior.
-
-## Operational Guidance
-
-### Threshold latency objectives
-
-Opt in to threshold counts without changing the duration histogram:
-
-```csharp
 builder.Services.AddServiceLevelIndicator(options =>
 {
     options.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
-    options.LatencyThresholds.Add(TimeSpan.FromSeconds(2));
-    options.LatencyThresholds.Add(TimeSpan.FromSeconds(10));
+    options.AutomaticallyEmitted = false;
+    options.LatencyThresholds.Add(TimeSpan.FromMilliseconds(250));
 });
+
+var app = builder.Build();
+app.UseServiceLevelIndicator();
+
+app.MapGet("/projects/{projectId:regex(^project-(blue|green|red)$)}",
+    ([CustomerResourceId] string projectId) => Results.Ok(new { projectId }))
+    .AddServiceLevelIndicator("GetProject");
+
+app.Run();
 ```
 
-The configured meter emits `operation.duration.threshold.count` (`Counter<long>`, unit `{operation}`): one increment per operation per threshold, with integer `sli.latency.threshold_ms` and `sli.latency.result = within | exceeded`. Equality is within. Thresholds must be distinct, positive whole milliseconds and are snapshotted at construction; none are enabled by default.
+Run with `dotnet run --urls http://localhost:5200` and request `http://localhost:5200/projects/project-blue`. The sample bounds project IDs deliberately; adapt these to your application's stable resource identifiers and cardinality budget.
 
-The counter retains SLI, API-version, abort, and custom dimensions, but omits HTTP status, HTTP method, and the abort-exception diagnostic. Timing does not determine success: a fast failure is still a failure. See the [threshold SLO recipes](docs/usage-reference.md#threshold-latency-objectives) for eligibility rules, no-data handling, and Azure delta-counter queries. In Azure, sum the counter's `AppMetrics.Sum` increments over the window, not its exported rows or `ItemCount`.
+The OTLP exporter defaults to `http://localhost:4317`. Set `OTEL_EXPORTER_OTLP_ENDPOINT` for your collector. The [included observability stack](sample/Observability/Grafana/README.md) can receive these metrics. Use your actual deployment location instead of the example region; no Azure SDK dependency is needed.
 
-### Aborts and availability
+For MVC, register controllers and chain `.AddMvc()` after `AddServiceLevelIndicator(...)` so SLI attributes are applied. See the [MVC integration guide](docs/usage-reference.md#aspnet-core-mvc) or [versioned MVC example](sample/WebApiVersioned/Program.cs).
 
-Abort-first availability can miss slow dependency outages when the caller gives up before the server fails. Pair availability with a successful-and-fast latency objective that explicitly includes slow aborts. The abort-exception diagnostic supports investigation but cannot prove an independent fault.
+## Background jobs and workers
 
-### Cardinality Guidance
-
-Required tags must be stable and meaningful. The library bounds `Operation` for you via the route-template resolver and the `<unrouted>` sentinel; you are responsible for `LocationId` (set once from configuration) and `CustomerResourceId` (stable tenant / subscription / resource identifier). `CustomerResourceId` may be high-cardinality when the backend is designed for it, but it must not be a per-request generated value.
-
-The same discipline applies to `[Measure]` parameters and any custom attributes added via `AddAttribute(...)`. Avoid email addresses, request IDs, timestamps, or unconstrained free text unless your metrics backend is explicitly designed for high-cardinality telemetry.
-
-### Disposal
-
-`ServiceLevelIndicator` is a sealed `IDisposable` registered as a singleton; the DI container disposes it (and the `Meter` it created) at host shutdown — no manual cleanup needed. A `Meter` you supply via `ServiceLevelIndicatorOptions.Meter` is owned by you and is never disposed by SLI.
-
-Configuration is copied per instance, including thresholds, without modifying caller options. Reusing options without a supplied meter creates independently owned meters. The instance's `ServiceLevelIndicatorOptions` property retains its effective meter; later changes to the original configuration do not update an existing instance.
-
-`MeasuredOperation.Dispose()` attempts recording once and reports errors rather than replacing an application result or exception. Invalid raw-list mutations drop the measurement; provider failures may leave partial data but are not retried. Public `Record`, `AddAttribute`, and `SetOutcome` inputs remain strictly validated, and action/result-selector errors still propagate.
-
-Histogram/threshold reconciliation assumes successful recording: a provider failure after histogram delivery can leave corresponding threshold counts behind.
-
-Recording warnings use `ILogger<ServiceLevelIndicator>` when available and EventSource provider `Trellis-ServiceLevelIndicators` (`MeasurementRecordingFailed`, event 1). A throwing diagnostic logger is isolated and reported through `DiagnosticLoggingFailed` (event 2).
-
-The provider is the public `ServiceLevelIndicatorEventSource.Log` contract, avoiding core/ASP internal coupling. Classifier fallback and enrichment failures emit events 3 and 4 independently of logging filters; enable EventSource collection to observe them. Exception-text fields are capped at 2048 UTF-16 code units, not redacted, and may still contain request data.
-
-## ASP.NET Core Customizations
-
-Once the prerequisites are done, eligible controllers/actions emit SLI information unless excluded.
-The default operation name is the HTTP method plus the route template (placeholders such as `{id}` are preserved). The full resolution order is described under **Trellis.ServiceLevelIndicators.Asp** above.
-
-### Exclude endpoints from automatic measurement
+Use the core package without any ASP.NET Core dependency. Prefer `Measure` / `MeasureAsync` for automatic outcome handling:
 
 ```csharp
-app.MapHealthChecks("/health")
-    .ExcludeFromServiceLevelIndicator();
-
-app.MapGet("/diagnostics", () => Results.Ok())
-    .ExcludeFromServiceLevelIndicator();
-
-var internalApi = app.MapGroup("/internal")
-    .ExcludeFromServiceLevelIndicator();
-internalApi.MapGet("/status", () => Results.Ok());
+async Task SyncProjectAsync(ServiceLevelIndicator sli, CancellationToken cancellationToken)
+{
+    await sli.MeasureAsync("SyncProject", () => Task.Delay(75, cancellationToken));
+}
 ```
 
-For MVC, put `[ExcludeFromServiceLevelIndicator]` on an action or controller. Controller and route-group exclusions apply to their child endpoints and win over automatic emission and explicit SLI inclusion metadata, regardless of registration order.
+Configure a stable `CustomerResourceId` for the workload. Successful completion records `Success`; exceptions record `Failure`; `OperationCanceledException` records `Ignored`. Exceptions still propagate to the application. Result selectors can classify failures returned as values.
 
-Exclusion happens before starting a scope, attaching the SLI feature, classification, or enrichment. The request emits no automatic duration, threshold, or measurement-related diagnostic counts, including on exception and abort paths. This is stronger than classifying a normal response as `Ignored`. Endpoint behavior and other ASP.NET Core/Application Insights telemetry are unchanged; explicit core measurements remain available.
+Raw `StartMeasuring(...)` scopes default to **`Ignored`**, not success or failure. If you use one, explicitly classify every completion, exception, and cancellation path. See the [core guide](docs/usage-reference.md#core-package) and [runnable console example](sample/ConsoleApp/Program.cs).
 
-### Customize HTTP classification
+## Focused examples
 
-Change one normal-response mapping without copying the defaults:
+Start with the always-on demo for the full experience. These smaller examples isolate individual integration APIs without maintaining competing demo stacks:
 
-```csharp
-builder.Services.AddServiceLevelIndicator(options => options.LocationId = locationId)
-    .ClassifyHttpOutcome((context, defaultOutcome) =>
-        context.Response.StatusCode == 429 && IsCallerQuotaRejection(context)
-            ? SliOutcome.ClientError
-            : defaultOutcome);
-```
+| Example | What it teaches |
+|---|---|
+| [Always-on Project Tracker](sample/Observability/Grafana/README.md) | MVC instrumentation, continuous incidents, exact latency counts, and customer-specific Grafana SLIs |
+| [Console](sample/ConsoleApp/Program.cs) | Core-only measurement, custom meter ownership/registration, and console export |
+| [Minimal API](sample/MinApi/Program.cs) | Endpoint opt-in, named operations, target-resource metadata, bounded dimensions, and health exclusion |
+| [API-versioned MVC](sample/WebApiVersioned/Program.cs) | The same project operation separated by `http.api.version` |
 
-`IsCallerQuotaRejection` represents application-specific limiter metadata; capacity rejection should remain `Failure`. The original one-argument replacement classifier remains supported, and the last fluent registration wins. `HttpOutcomeClassifier.ClassifyStatusCode(int)` exposes the built-in mapping. Neither callback overrides abort or escaping-exception handling.
+**[Run the focused examples](docs/usage-reference.md#running-the-focused-examples)** for commands, URLs, and expected metrics. The web examples share the demo's Collector/Prometheus/Grafana stack; their `Api.http` files contain ready-to-send requests.
 
-HTTP callback exceptions or undefined outcomes are warning-logged and use the built-in status outcome, without trying a lower-priority callback. Enrichment continues and handler response/exception behavior is preserved, even if diagnostic logging throws. This differs from explicit core result selectors, whose errors still propagate.
+## Integration and operational reference
 
-**Fallback changes the SLO population:** custom-ignored `/health` can become `Success`, and a custom-client-error 429 can become `Failure`. Monitor `HttpOutcomeClassificationFailed` (EventSource event 3), which includes the fallback outcome even when warning logs are filtered.
+Keep metric dimensions stable: no personal names, emails, request IDs, timestamps, or arbitrary free text. `CustomerResourceId` identifies the target, even when a caller acts across tenants; enrichment must not silently replace it with the caller's tenant.
 
-- To add API versioning as a dimension use package `Trellis.ServiceLevelIndicators.Asp.ApiVersioning` and enrich the metrics with `AddApiVersion`.
+| Topic | Guide |
+|---|---|
+| Integration and configuration | [Usage reference](docs/usage-reference.md) |
+| Outcome policies and aborts | [Status semantics](docs/usage-reference.md#status-semantics) |
+| Exact latency objectives and queries | [Threshold latency objectives](docs/usage-reference.md#threshold-latency-objectives) |
+| Custom meters and disposal | [Custom meter registration](docs/usage-reference.md#custom-meter-registration) |
+| Endpoint exclusions | [Exclude endpoints](docs/usage-reference.md#exclude-endpoints-from-automatic-sli-measurement) |
+| Additional dimensions | [Enrichment and bounded attributes](docs/usage-reference.md#enrichment-and-bounded-attributes) |
+| Recording/classifier/enrichment failures | [Instrumentation failure policy](docs/usage-reference.md#instrumentation-failure-policy) |
+| Coding-assistant package guides | [Optional API guidance](docs/usage-reference.md#optional-api-guidance-for-coding-assistants) |
+| SQL cancellation fixture | [Provider cancellation integration](docs/usage-reference.md#provider-cancellation-integration) |
 
-   Example:
-
-    ```csharp
-    builder.Services.AddServiceLevelIndicator(options =>
-    {
-        /// Options
-    })
-    .AddMvc()
-    .AddApiVersion();
-    ```
-
-- `http.request.method` is emitted by default by the ASP.NET Core middleware. `AddHttpMethod()` remains available as a no-op for older setup code.
-
-- Enrich SLI with the `Enrich` callback. The callback receives a `MeasuredOperation` as context that can be used to set `CustomerResourceId` or additional attributes.
-  An async version `EnrichAsync` is also available.
-
-   Example:
-
-    ```csharp
-    builder.Services.AddServiceLevelIndicator(options =>
-    {
-        options.LocationId = ServiceLevelIndicator.CreateLocationId(Cloud, Region);
-    })
-    .AddMvc()
-    .Enrich(context =>
-    {
-        // Pull a STABLE tenant/subscription identifier — NOT the caller's UPN/user ID.
-        var tenantId = context.HttpContext.User.Claims
-            .FirstOrDefault(c => c.Type == "tid")?.Value ?? "unknown";
-        context.SetCustomerResourceId(tenantId);
-
-        // Caller identity belongs in a separate (still bounded) dimension, not in CustomerResourceId.
-        var tier = context.HttpContext.User.Claims
-            .FirstOrDefault(c => c.Type == "tier")?.Value ?? "free";
-        context.AddAttribute("CallerTier", tier);
-    });
-    ```
-
-- To override the default operation name, add the attribute `[ServiceLevelIndicator]` and specify the operation name.
-
-   Example:
-
-    ```csharp
-    [HttpGet("MyAction2")]
-    [ServiceLevelIndicator(Operation = "MyNewOperationName")]
-    public IEnumerable<WeatherForecast> GetOperation() => GetWeather();
-    ```
-
-- To set the `CustomerResourceId` within an API method, mark the parameter with the attribute `[CustomerResourceId]`
-
-    ```csharp
-    [HttpGet("teams/{teamId}")]
-    public IEnumerable<WeatherForecast> GetByTeam([CustomerResourceId] string teamId)
-       => GetWeather();
-    ```
-
-    Or use `GetMeasuredOperation` extension method.
-
-    ``` csharp
-    [HttpGet("{customerResourceId}")]
-    public IEnumerable<WeatherForecast> Get(string customerResourceId)
-    {
-        HttpContext.GetMeasuredOperation().CustomerResourceId = customerResourceId;
-        return GetWeather();
-    }
-    ```
-
-- To add custom Open Telemetry attributes.  
-
-    ``` csharp
-    HttpContext.GetMeasuredOperation().AddAttribute(attribute, value);
-    ```
-
-    GetMeasuredOperation will **throw** if the route is not configured to emit SLI.
-
-    When used in a middleware or scenarios where a route may not be configured to emit SLI.
-
-    ``` csharp
-    if (HttpContext.TryGetMeasuredOperation(out var measuredOperation))
-        measuredOperation.AddAttribute("CustomAttribute", value);
-    ```
-
-    You can add additional dimensions to the SLI data by using the `Measure` attribute. Parameters decorated with `[Measure]` are automatically added as metric attributes (dimensions) using the parameter name as the attribute key.
-
-    ```csharp
-    [HttpGet("name/{first}/{surname}")]
-    public IActionResult GetCustomerResourceId(
-        [Measure] string first,
-        [CustomerResourceId] string surname)
-          => Ok(first + " " + surname);
-    ```
-
-- To prevent automatically emitting SLI information on all controllers, set the option,
-
-    ``` csharp
-    builder.Services.AddServiceLevelIndicator(options =>
-    {
-        options.AutomaticallyEmitted = false;
-    })
-    .AddMvc();
-    ```
-
-    In this case, add the attribute `[ServiceLevelIndicator]` on the controllers that should emit SLI.
-
-## Sample
-
-Try out the sample weather forecast Web API.
-
-For a local Grafana/Prometheus/OpenTelemetry Collector experience, run the provisioned dashboard in [`sample\Observability\Grafana`](sample/Observability/Grafana/README.md). It shows SLI latency percentiles, success rate, failures, client errors, unknown customer diagnostics, and `<unrouted>` detection.
-
-To view the metrics locally using the [.NET Aspire Dashboard](https://aspire.dev/dashboard/standalone/):
-
-1. Start the Aspire dashboard:
-   ```
-   docker run --rm -it -d -p 18888:18888 -p 4317:18889 -e DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS=true -e DASHBOARD__OTLP__AUTHMODE=Unsecured --name aspire-dashboard mcr.microsoft.com/dotnet/aspire-dashboard:latest
-   ```
-2. Run the sample web API project and call the `GET WeatherForecast` using the Open API UI.
-3. Open `http://localhost:18888` to view the dashboard. You should see the SLI metrics under the instrument `operation.duration` where `Operation = "GET WeatherForecast"`, `Outcome = "Success"`, `http.response.status.code = 200`, and `LocationId = "ms-loc://az/public/westus3"`.
-![SLI](assets/aspire.jpg)
-4. If you run the sample with API Versioning, you will see something similar to the following.
-![SLI](assets/versioned.jpg)
-
-## Optional API guidance for coding assistants
-
-Each ServiceLevelIndicators NuGet package now carries its own versioned API reference
-at the package root (`trellis-api-sli*.md`) and guidance manifest. The packages
-remain independent of `Trellis.Core`.
-Ordinary restore/build do not write `.github/`, `AGENTS.md`, or `.agentdocs/`
-unless the consuming repository explicitly opts into the separate local
-`Trellis.AgentDocs` tool. After restoring the consuming project or solution,
-run once from its Git root:
-
-```powershell
-dotnet new tool-manifest --output .config
-dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.20 --tool-manifest .config/dotnet-tools.json
-dotnet tool run agentdocs init <solution-or-project>
-```
-
-Reuse an existing root `.config/dotnet-tools.json` instead of creating another.
-Restoring a package never activates its guide. `init` lists each package that
-publishes guidance as pending and prints the package IDs to add to
-`approvedPackages` in `.agentdocs/policy.json`. Add the SLI packages you trust,
-then run `dotnet tool run agentdocs sync` to install their guides into Git-root
-`.agentdocs/`; `init` also adds the managed instruction pointers. The SLI guides
-are on-demand: the generated index lists each with a description, and an agent
-opens one when its task concerns SLI metrics. After a package upgrade, run
-`dotnet restore` and then `dotnet tool run agentdocs sync`. The helper and tool
-are preview packages published on NuGet.org.
-
-For package maintainers, the three publishing projects use a pinned, private
-`Trellis.AgentDocs.Packaging` build dependency to generate their manifests at
-pack time. Each project sets `TrellisApiRefDescription`, the one-line "Open
-when..." topic consumers see in their index, and the guides refer to sibling
-packages by ID rather than by link because every package installs into its own
-directory. Its build target is not included in the published SLI
-packages. Run `pwsh build/test-guidance-packages.ps1` after packing to verify
-the payload and absence of legacy consumer targets.
-
-## Provider cancellation integration
-
-The ASP.NET tests include real mid-flight `HttpClient` cancellation. Real `SqlClient` cancellation requires a dedicated SQL fixture; without `TRELLIS_SLI_SQL_CONNECTION_STRING`, those cases are explicitly skipped. On Windows with SQL Server Express LocalDB installed, run:
-
-```powershell
-dotnet restore Trellis.ServiceLevelIndicators.Asp\tests\Trellis.ServiceLevelIndicators.Asp.Tests.csproj
-pwsh -NoProfile -File build\test-sql-cancellation.ps1
-```
-
-The script creates, starts, stops, and deletes its own uniquely named LocalDB instance. It does not use or modify shared instances. The Windows CI job runs this fixture; provider dependencies are test-only. For another dedicated SQL Server, supply the environment variable and run the ASP.NET tests; the fixture needs permission to inspect `sys.dm_exec_requests` so cancellation occurs after the command is genuinely in flight.
+API references: [Core](docs/api_reference/trellis-api-sli.md) | [ASP.NET Core](docs/api_reference/trellis-api-sli-asp.md) | [API Versioning](docs/api_reference/trellis-api-sli-apiversioning.md).
 
 ## Related repositories
 

@@ -1,83 +1,58 @@
-﻿using Azure.Core;
-using OpenTelemetry.Metrics;
+﻿using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
-using SampleMinimalApiSli;
 using Scalar.AspNetCore;
 using Trellis.ServiceLevelIndicators;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure the HTTP request pipeline.
-
-var summaries = new[]
-{
-    "Freezing", "Bracing", "Chilly", "Cool", "Mild", "Warm", "Balmy", "Hot", "Sweltering", "Scorching"
-};
-
 builder.Services.AddOpenApi();
-
-// Build a resource configuration action to set service information.
-
-Action<ResourceBuilder> configureResource = r => r.AddService(
-    serviceName: "SampleMinimalApiSli",
-    serviceVersion: typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown");
-
 builder.Services.AddOpenTelemetry()
-    .ConfigureResource(configureResource)
-    .WithMetrics(builder =>
+    .ConfigureResource(resource => resource.AddService("SampleMinimalApiSli"))
+    .WithMetrics(metrics =>
     {
-        builder.AddServiceLevelIndicatorInstrumentation();
-        builder.AddOtlpExporter();
+        metrics.AddServiceLevelIndicatorInstrumentation();
+        metrics.AddOtlpExporter();
     });
 
 builder.Services.AddServiceLevelIndicator(options =>
 {
-    options.CustomerResourceId = "SampleCustomerResourceId";
-    options.LocationId = ServiceLevelIndicator.CreateLocationId("public", AzureLocation.WestUS3.Name);
+    options.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
+    options.AutomaticallyEmitted = false;
+    options.LatencyThresholds.Add(TimeSpan.FromMilliseconds(250));
 });
 
-// Add services to the container.
-
 var app = builder.Build();
+app.UseServiceLevelIndicator();
 
-app.MapGet(
-        "/weatherforecast/{cid}",
-        ([CustomerResourceId] string cid) =>
-            Enumerable.Range(1, 5).Select(index =>
-            new WeatherForecast
-            (
-                DateTime.Now.AddDays(index),
-                Random.Shared.Next(-20, 55),
-                summaries[Random.Shared.Next(summaries.Length)]
-            )))
-   .AddServiceLevelIndicator();
+var projects = app.MapGroup("/projects/{projectId:regex(^project-(blue|green|red)$)}");
 
-app.MapGet(
-        "/background/{workType:regex(^(Quick|Standard|Slow)$)}",
-        ([Measure("WorkType")] string workType) => Task.Delay(workType switch
+projects.MapGet("/", ([CustomerResourceId] string projectId) => Results.Ok(new { projectId }))
+    .AddServiceLevelIndicator("GetProject");
+
+projects.MapPost("/sync/{mode:regex(^(quick|standard|slow)$)}",
+    async ([CustomerResourceId] string projectId, [Measure("SyncMode")] string mode,
+        CancellationToken cancellationToken) =>
+    {
+        var delay = mode switch
         {
-            nameof(WorkType.Quick) => TimeSpan.FromMilliseconds(250),
-            nameof(WorkType.Standard) => TimeSpan.FromSeconds(1),
-            nameof(WorkType.Slow) => TimeSpan.FromSeconds(2),
-            _ => TimeSpan.FromSeconds(1)
-        }))
-   .AddServiceLevelIndicator("background_work");
+            "quick" => 50,
+            "standard" => 150,
+            "slow" => 400,
+            _ => throw new ArgumentOutOfRangeException(nameof(mode))
+        };
+        await Task.Delay(delay, cancellationToken);
+        return Results.Ok(new { projectId, mode });
+    })
+    .AddServiceLevelIndicator("SyncProject");
 
-app.UseUserRoute();
+app.MapGet("/health", () => Results.Ok())
+    .ExcludeFromServiceLevelIndicator();
+
 app.MapOpenApi();
 app.MapScalarApiReference();
-app.UseHttpsRedirection();
-app.UseServiceLevelIndicator();
 app.Run();
 
-internal record WeatherForecast(DateTime Date, int TemperatureC, string? Summary)
-{
-    public int TemperatureF => 32 + (int)(TemperatureC / 0.5556);
-}
-
-internal enum WorkType
-{
-    Quick,
-    Standard,
-    Slow
-}
+/// <summary>
+/// Application entry point for integration tests.
+/// </summary>
+public partial class Program;

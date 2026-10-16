@@ -15,8 +15,12 @@ If you want automatic measurement of ASP.NET Core endpoints, use [Trellis.Servic
 ## Installation
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators
+dotnet add package Trellis.ServiceLevelIndicators --prerelease
+dotnet add package OpenTelemetry.Extensions.Hosting
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
 ```
+
+The OpenTelemetry hosting and OTLP exporter extensions are separate dependencies used by the examples below. Import `OpenTelemetry.Metrics` and `Trellis.ServiceLevelIndicators`; custom meters also need `System.Diagnostics.Metrics`.
 
 ## Quick Start
 
@@ -34,7 +38,7 @@ builder.Services.AddOpenTelemetry()
 If you supply a custom `Meter` in `ServiceLevelIndicatorOptions`, register that same meter with OpenTelemetry:
 
 ```csharp
-var sliMeter = new Meter("MyCompany.ServiceLevelIndicator");
+using var sliMeter = new Meter("MyCompany.ServiceLevelIndicator");
 
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics =>
@@ -63,22 +67,20 @@ builder.Services.AddServiceLevelIndicator(options =>
 
 ### 3. Measure operations
 
-Wrap any block of code in a `using StartMeasuring` scope:
+Prefer `Measure` / `MeasureAsync` to infer outcomes from completion, exceptions, and cancellation:
 
 ```csharp
-void DoWork(ServiceLevelIndicator sli)
-{
-    using var op = sli.StartMeasuring("ProcessOrder");
-    // Do work...
-    op.SetOutcome(SliOutcome.Success);
-}
+Task DoWorkAsync(ServiceLevelIndicator sli, CancellationToken cancellationToken) =>
+    sli.MeasureAsync("ProcessOrder", () => Task.Delay(50, cancellationToken));
 ```
 
-You can also pass custom attributes:
+These helpers record `Success` on completion, `Failure` on exceptions, and `Ignored` for `OperationCanceledException`; exceptions still propagate. Raw `StartMeasuring(...)` scopes default to `Ignored` and do not detect thrown work. If you use one, explicitly classify every completion, failure, and cancellation path.
+
+Helpers also accept custom attributes:
 
 ```csharp
 var attribute = new KeyValuePair<string, object?>("Event", "OrderCreated");
-using var op = sli.StartMeasuring("ProcessOrder", attribute);
+await sli.MeasureAsync("ProcessOrder", () => Task.Delay(50), attribute);
 ```
 
 Custom attribute names must be unique and must not reuse SLI-reserved tags: `CustomerResourceId`, `LocationId`, `Operation`, `Outcome`, `activity.status.code`, `http.request.method`, `http.response.status.code`, `sli.request.aborted`, `sli.request.abort_exception`, `sli.latency.threshold_ms`, or `sli.latency.result`.
@@ -135,6 +137,8 @@ builder.Services.AddServiceLevelIndicator(options =>
 ```
 
 `LatencyThresholds` is an initially empty, get-only collection. Configure distinct, positive, whole-millisecond values at startup. Invalid or duplicate values fail before instruments are created; configuration is snapshotted when the singleton is constructed.
+
+Thresholds classify recorded elapsed time; they do not enforce timeouts, cancel work, or decide the SLI outcome.
 
 | Element | Contract |
 |---|---|
@@ -213,6 +217,6 @@ agent opens it when its task concerns SLI metrics. After a package upgrade, run
 
 ## Further Reading
 
-- [Full documentation and samples](https://github.com/xavierjohn/ServiceLevelIndicators)
-- [Package selection and usage reference](https://github.com/xavierjohn/ServiceLevelIndicators/blob/main/docs/usage-reference.md)
+- [Full documentation and samples](https://github.com/xavierjohn/Trellis.ServiceLevelIndicators)
+- [Package selection and usage reference](https://github.com/xavierjohn/Trellis.ServiceLevelIndicators/blob/main/docs/usage-reference.md)
 - [OpenTelemetry .NET](https://opentelemetry.io/docs/languages/dotnet/)

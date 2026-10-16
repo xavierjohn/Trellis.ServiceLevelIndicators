@@ -1,21 +1,16 @@
-@HostAddress = https://localhost:6001
+@HostAddress = http://localhost:5201
 
-//Weather 
-GET {{HostAddress}}/weatherforecast/Redmond
+### Named operation with a stable target resource
+GET {{HostAddress}}/projects/project-blue
 Accept: application/json
 
-###
-
-// User
-
-// Hello World
-GET {{HostAddress}}/users/
+### Bounded SyncMode dimension; quick and standard usually meet the 250 ms threshold
+POST {{HostAddress}}/projects/project-blue/sync/quick
 Accept: application/json
 
-###
-
-// Hello World Xavier
-GET {{HostAddress}}/users/Xavier
+### Slow success: availability succeeds, latency threshold is exceeded
+POST {{HostAddress}}/projects/project-red/sync/slow
 Accept: application/json
 
-###
+### Health is not measured
+GET {{HostAddress}}/health

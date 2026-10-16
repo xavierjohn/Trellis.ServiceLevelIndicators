@@ -3,7 +3,7 @@ package: Trellis.ServiceLevelIndicators.Asp.ApiVersioning
 namespaces: [Trellis.ServiceLevelIndicators]
 types: [ServiceLevelIndicatorServiceCollectionExtensions, ApiVersionEnrichment]
 version: v10
-last_verified: 2026-10-15
+last_verified: 2026-10-16
 audience: [llm]
 ---
 
@@ -21,7 +21,7 @@ See also the `Trellis.ServiceLevelIndicators` and `Trellis.ServiceLevelIndicator
 
 | Tag | Value |
 |---|---|
-| `http.api.version` | The single resolved API version (e.g. `2023-06-06`), `"Neutral"` if the endpoint is API-version-neutral, `"Unspecified"` if no version was requested and no default was assumed, or `""` if the request is invalid or ambiguous. |
+| `http.api.version` | The single resolved API version (e.g. `1.0`, `2.0`, or `2023-06-06`), `"Neutral"` if the endpoint is API-version-neutral, `"Unspecified"` if no version was requested and no default was assumed, or `""` if the request is invalid or ambiguous. |
 
 Resolved versions are retained on aborted MVC and Minimal API requests, and on the opt-in `operation.duration.threshold.count` counter. Date-based values remain date-only strings; Kusto may interpret date-like dynamic properties as `datetime`, which should be normalized in queries rather than by changing library formatting.
 
@@ -80,13 +80,26 @@ This enrichment is registered as a singleton via `TryAddEnumerable`, so calling 
 
 ## Typical usage
 
+For MVC, install the versioning implementation and separate telemetry dependencies as well as SLI:
+
+```shell
+dotnet add package Trellis.ServiceLevelIndicators.Asp.ApiVersioning --prerelease
+dotnet add package Asp.Versioning.Mvc
+dotnet add package OpenTelemetry.Extensions.Hosting
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
+```
+
+Within an existing ASP.NET Core `builder`:
+
 ```csharp
 using Asp.Versioning;
+using OpenTelemetry.Metrics;
 using Trellis.ServiceLevelIndicators;
 
+builder.Services.AddControllers();
 builder.Services.AddApiVersioning(o =>
 {
-    o.DefaultApiVersion = new ApiVersion(2023, 6, 6);
+    o.ApiVersionReader = new QueryStringApiVersionReader();
     o.ReportApiVersions = true;
 }).AddMvc();
 
@@ -96,13 +109,18 @@ builder.Services.AddOpenTelemetry()
 builder.Services.AddServiceLevelIndicator(o =>
 {
     o.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
+    o.AutomaticallyEmitted = false;
 })
 .AddMvc()
-.AddApiVersion();   // ← from Trellis.ServiceLevelIndicators.Asp.ApiVersioning
+.AddApiVersion();
 
 var app = builder.Build();
 app.UseRouting();
 app.UseServiceLevelIndicator();
+app.MapControllers();
+app.Run();
 ```
 
-A request to a `[ApiVersion("2023-06-06")]` endpoint then emits the standard SLI tags plus `http.api.version=2023-06-06`. Requests to an `[ApiVersionNeutral]` endpoint emit `http.api.version=Neutral`.
+Mark the measured controller/action with `[ServiceLevelIndicator]` and declare its supported versions with `[ApiVersion("1.0")]` and `[ApiVersion("2.0")]`. A request such as `GET /projects/project-blue?api-version=2.0` to that controller emits the standard SLI tags plus `http.api.version=2.0`. Date-based versions remain supported. Measured `[ApiVersionNeutral]` endpoints emit `http.api.version=Neutral`.
+
+`AddApiVersion()` enriches existing SLI measurements; it does not configure version routing or enable measurement on an otherwise excluded/opt-out endpoint.

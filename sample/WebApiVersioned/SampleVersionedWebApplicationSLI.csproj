@@ -2,12 +2,10 @@
   <PropertyGroup>
     <GenerateDocumentationFile>True</GenerateDocumentationFile>
     <WarnOnPackingNonPackableProject>false</WarnOnPackingNonPackableProject>
-    <NoWarn>$(NoWarn);CA1707</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Asp.Versioning.Mvc.ApiExplorer" />
     <PackageReference Include="Asp.Versioning.OpenApi" />
-    <PackageReference Include="Azure.Core" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />

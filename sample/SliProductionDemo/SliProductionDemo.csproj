@@ -1,14 +1,11 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+<Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <GenerateDocumentationFile>True</GenerateDocumentationFile>
     <WarnOnPackingNonPackableProject>false</WarnOnPackingNonPackableProject>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Azure.Core" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
-    <PackageReference Include="Scalar.AspNetCore" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\Trellis.ServiceLevelIndicators.Asp\src\Trellis.ServiceLevelIndicators.Asp.csproj" />

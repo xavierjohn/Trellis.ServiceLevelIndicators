@@ -13,7 +13,7 @@ This package extends [Trellis.ServiceLevelIndicators.Asp](https://www.nuget.org/
 ## Installation
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators.Asp.ApiVersioning
+dotnet add package Trellis.ServiceLevelIndicators.Asp.ApiVersioning --prerelease
 ```
 
 > Requires [Trellis.ServiceLevelIndicators.Asp](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp) (installed automatically as a dependency).
@@ -76,6 +76,6 @@ agent opens it when its task concerns SLI metrics. After a package upgrade, run
 
 ## Further Reading
 
-- [Full documentation and samples](https://github.com/xavierjohn/ServiceLevelIndicators)
-- [Package selection and usage reference](https://github.com/xavierjohn/ServiceLevelIndicators/blob/main/docs/usage-reference.md)
+- [Full documentation and samples](https://github.com/xavierjohn/Trellis.ServiceLevelIndicators)
+- [Package selection and usage reference](https://github.com/xavierjohn/Trellis.ServiceLevelIndicators/blob/main/docs/usage-reference.md)
 - [ASP.NET API Versioning](https://github.com/dotnet/aspnet-api-versioning)

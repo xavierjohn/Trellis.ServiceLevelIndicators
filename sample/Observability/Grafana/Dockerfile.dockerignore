@@ -1,0 +1,9 @@
+.git
+.vs
+**/bin
+**/obj
+**/TestResults
+**/artifacts
+**/*.user
+**/*.nupkg
+**/*.snupkg

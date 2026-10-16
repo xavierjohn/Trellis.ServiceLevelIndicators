@@ -1,8 +1,8 @@
 # Trellis.ServiceLevelIndicators Usage Reference
 
-This document is a compact reference for choosing the correct package and wiring it into a .NET application.
+Choose the correct package, wire it into a .NET application, and define the population and dimensions behind your SLIs. For a complete copyable Minimal API setup, start with the [root README](../README.md#installation).
 
-**Source-tree availability:** result selectors and endpoint exclusion are additions after `10.0.0-preview.37`; use a package containing these changes. They are not available in preview.37.
+**Source-tree availability:** result selectors, endpoint exclusions, and the instrumentation failure policy are additions after `10.0.0-preview.37`; use a package containing these changes. They are not available in preview.37. The Docker demo builds the current source.
 
 ## Package Matrix
 
@@ -11,6 +11,19 @@ This document is a compact reference for choosing the correct package and wiring
 | Measure code in any .NET app | `Trellis.ServiceLevelIndicators` | Core latency SLI measurement for console apps, workers, background jobs, and shared libraries |
 | Automatically measure ASP.NET Core endpoints | `Trellis.ServiceLevelIndicators.Asp` | Middleware, MVC, and Minimal API integration |
 | Add API version as a metric dimension | `Trellis.ServiceLevelIndicators.Asp.ApiVersioning` | Adds `http.api.version` enrichment for apps using Asp.Versioning |
+
+## OpenTelemetry Setup
+
+The hosting and OTLP exporter extensions used below are separate packages, not dependencies supplied by SLI:
+
+```shell
+dotnet add package OpenTelemetry.Extensions.Hosting
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
+```
+
+The examples assume a host/application `builder`. Import `OpenTelemetry.Metrics`, `OpenTelemetry.Resources`, and `Trellis.ServiceLevelIndicators`. Custom-meter code also needs `System.Diagnostics.Metrics`.
+
+The OTLP exporter defaults to `http://localhost:4317`; set `OTEL_EXPORTER_OTLP_ENDPOINT` for your collector. The location examples use a plain region string and do not require Azure.Core. Use `--prerelease` when installing preview SLI packages.
 
 ## Metric Contract
 
@@ -35,7 +48,7 @@ The opt-in `operation.duration.threshold.count` counter has unit `{operation}`. 
 Install:
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators
+dotnet add package Trellis.ServiceLevelIndicators --prerelease
 ```
 
 Register with OpenTelemetry:
@@ -62,21 +75,19 @@ builder.Services.AddServiceLevelIndicator(options =>
 Measure work:
 
 ```csharp
-async Task ProcessOrder(ServiceLevelIndicator sli)
-{
-    using var op = sli.StartMeasuring("ProcessOrder");
-    op.AddAttribute("OrderType", "Standard");
-
-    await Task.Delay(50);
-
-    op.SetOutcome(SliOutcome.Success);
-}
+Task ProcessOrderAsync(ServiceLevelIndicator sli, CancellationToken cancellationToken) =>
+    sli.MeasureAsync(
+        "ProcessOrder",
+        () => Task.Delay(50, cancellationToken),
+        new KeyValuePair<string, object?>("OrderType", "Standard"));
 ```
 
-Direct recording is also available when you already know the elapsed time. `Record(...)` emits `CustomerResourceId`, `LocationId`, `Operation`, `Outcome`, and any custom attributes supplied to the call. Manual measurements default to `Ignored` unless you set an outcome.
+`Measure` / `MeasureAsync` infer `Success` on normal completion, `Failure` on exceptions, and `Ignored` for `OperationCanceledException`. Exceptions still propagate. Raw `StartMeasuring(...)` scopes start as `Ignored`: disposal does not inspect an exception escaping the scope. If you use raw scopes, explicitly classify normal completion, failure, and cancellation.
+
+Direct recording is also available when you already know the elapsed time. `Record(...)` emits `CustomerResourceId`, `LocationId`, `Operation`, `Outcome`, and any custom attributes supplied to the call. Calls without an explicit outcome also default to `Ignored`.
 
 ```csharp
-sli.Record("ProcessOrder", elapsedTime: 42);
+sli.Record("ProcessOrder", elapsedTime: 42, outcome: SliOutcome.Success);
 ```
 
 ### Classify returned values
@@ -114,6 +125,8 @@ builder.Services.AddServiceLevelIndicator(options =>
 ```
 
 `LatencyThresholds` is a get-only collection, empty by default. Values must be distinct, positive whole milliseconds; invalid configuration fails before instrument creation. The collection is snapshotted at construction. All direct recordings, scopes, helpers, and measured HTTP requests contribute once per threshold.
+
+These are measurement boundaries, not timeouts: they do not cancel work, change HTTP status, or determine success/failure.
 
 | Counter element | Contract |
 |---|---|
@@ -172,7 +185,7 @@ Options are copied at construction, including thresholds; creating an internal m
 If you provide a custom `Meter` in `ServiceLevelIndicatorOptions`, register that same meter with OpenTelemetry.
 
 ```csharp
-var sliMeter = new Meter("MyCompany.ServiceLevelIndicator");
+using var sliMeter = new Meter("MyCompany.ServiceLevelIndicator");
 
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics =>
@@ -197,12 +210,14 @@ metrics.AddServiceLevelIndicatorInstrumentation("MyCompany.ServiceLevelIndicator
 metrics.AddServiceLevelIndicatorInstrumentation(sliMeter);
 ```
 
+The DI container owns the singleton `ServiceLevelIndicator` and disposes any meter SLI creates at shutdown. A supplied meter remains application-owned; keep it alive until recording and export finish, then dispose it. The top-level `using` above assumes the host runs within that scope. The [console example](../sample/ConsoleApp/Program.cs) demonstrates complete meter, service-provider, and exporter lifetimes.
+
 ## ASP.NET Core MVC
 
 Install:
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators.Asp
+dotnet add package Trellis.ServiceLevelIndicators.Asp --prerelease
 ```
 
 Register services:
@@ -237,23 +252,21 @@ builder.Services.AddServiceLevelIndicator(options =>
     options.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
 })
 .AddMvc()
-.Enrich(context =>
-{
-    context.SetCustomerResourceId("tenant-a");
-    context.AddAttribute("ProductTier", "Premium");
-});
+.Enrich(context => context.AddAttribute("ProductTier", "Premium"));
 ```
 
 Action-level attributes:
 
 ```csharp
-[HttpGet("orders/{customerId}/{orderType}")]
-[ServiceLevelIndicator(Operation = "GetOrder")]
-public IActionResult Get(
-    [CustomerResourceId] string customerId,
-    [Measure(Name = "OrderType")] string orderType)
+[HttpPost("projects/{projectId}/sync/{mode:regex(^(quick|standard|slow)$)}")]
+[ServiceLevelIndicator(Operation = "SyncProject")]
+public IActionResult Sync(
+    [CustomerResourceId] string projectId,
+    [Measure("SyncMode")] string mode)
     => Ok();
 ```
+
+Register controllers with `builder.Services.AddControllers()` and map them with `app.MapControllers()`. `AddMvc()` above installs SLI conventions; it does not replace ASP.NET Core controller registration. Automatic measurement is enabled by default. To opt in, set `AutomaticallyEmitted = false` and mark controllers/actions with `[ServiceLevelIndicator]`.
 
 ## ASP.NET Core Minimal APIs
 
@@ -280,10 +293,14 @@ app.UseServiceLevelIndicator();
 Mark each endpoint that should emit SLI data:
 
 ```csharp
-app.MapGet("/orders/{customerId}/{orderType}",
-    ([CustomerResourceId] string customerId, [Measure(Name = "OrderType")] string orderType) => Results.Ok())
-    .AddServiceLevelIndicator("GetOrder");
+app.MapPost("/projects/{projectId}/sync/{mode:regex(^(quick|standard|slow)$)}",
+    ([CustomerResourceId] string projectId, [Measure("SyncMode")] string mode) => Results.Ok())
+    .AddServiceLevelIndicator("SyncProject");
 ```
+
+The named target must be a stable, validated resource identifier. The route constraint bounds `SyncMode` to three values. See the [runnable Minimal API example](../sample/MinApi/Program.cs) for endpoint opt-in, bounded project IDs, and health exclusion.
+
+Register `AddServiceLevelIndicator()` once per endpoint, either on its group or on the handler. Applying it to both can duplicate parameter metadata and fail endpoint initialization.
 
 ## Exclude Endpoints from Automatic SLI Measurement
 
@@ -318,7 +335,7 @@ The endpoint still executes and other ASP.NET Core/Application Insights telemetr
 Install:
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators.Asp.ApiVersioning
+dotnet add package Trellis.ServiceLevelIndicators.Asp.ApiVersioning --prerelease
 ```
 
 Register enrichment:
@@ -333,6 +350,8 @@ builder.Services.AddServiceLevelIndicator(options =>
 ```
 
 This adds the `http.api.version` metric dimension when Asp.Versioning is present. The value is the single resolved API version, `Neutral`, `Unspecified`, or an empty string when the requested version is invalid or ambiguous.
+
+`AddApiVersion()` enriches SLI; it does not configure Asp.Versioning routing or version discovery. See the [versioned MVC example](../sample/WebApiVersioned/Program.cs) for the complete registration and query-string version reader.
 
 ## ASP.NET Runtime Helpers
 
@@ -350,6 +369,34 @@ if (HttpContext.TryGetMeasuredOperation(out var measuredOperation))
 ```
 
 Use `GetMeasuredOperation()` when the route is guaranteed to emit SLI metrics. Use `TryGetMeasuredOperation()` in shared middleware or filters.
+
+## Enrichment and Bounded Attributes
+
+`Enrich` receives a `WebEnrichmentContext`, not a `MeasuredOperation`. It wraps the measurement and exposes `HttpContext`, `SetCustomerResourceId(...)`, and `AddAttribute(...)`. `EnrichAsync` receives the same context plus a cancellation token and returns `ValueTask`.
+
+For example, map a caller-tier claim to an explicitly bounded set without changing the target resource:
+
+```csharp
+builder.Services.AddServiceLevelIndicator(options =>
+{
+    options.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
+})
+.Enrich(context =>
+{
+    var tier = context.HttpContext.User.FindFirst("tier")?.Value switch
+    {
+        "free" => "free",
+        "standard" => "standard",
+        "premium" => "premium",
+        _ => "unknown"
+    };
+    context.AddAttribute("CallerTier", tier);
+});
+```
+
+Enrichment runs after endpoint handling and can overwrite a target already extracted from `[CustomerResourceId]`. Only call `SetCustomerResourceId` with the resolved target of the operation. A caller's `tid` claim is not necessarily that target, especially for cross-tenant administration; using it requires an explicit same-tenant guarantee. Caller identity belongs in audit logs/traces, not SLI dimensions.
+
+`[Measure]` adds a parameter value as an attribute using the parameter name (or its configured override). Use bounded categories such as the `SyncMode` route above, never personal names or arbitrary text.
 
 ## Status Semantics
 
@@ -437,6 +484,82 @@ Avoid values that can explode cardinality unless your backend is designed for th
 4. Forgetting `.AddServiceLevelIndicator()` on Minimal API endpoints when `AutomaticallyEmitted` is `false`.
 5. Renaming `CustomerResourceId` or `LocationId` even though downstream systems depend on those exact names.
 6. Reusing reserved tags: required SLI dimensions, `activity.status.code`, HTTP method/status, `sli.request.aborted`, `sli.request.abort_exception`, `sli.latency.threshold_ms`, or `sli.latency.result`.
+7. Assuming a raw `StartMeasuring(...)` scope detects thrown work: without explicit classification it records `Ignored`, not `Failure`.
+8. Replacing the target resource with the caller's tenant or emitting personal names as `[Measure]` dimensions.
+
+## Running the Focused Examples
+
+The [always-on Docker demo](../sample/Observability/Grafana/README.md) is the main end-to-end experience. These .NET 10 examples use the same Project Tracker vocabulary but isolate one integration each. Run commands from the repository root.
+
+### Console: core only and custom meters
+
+```powershell
+dotnet run --project .\sample\ConsoleApp\SampleConsoleSLI.csproj
+```
+
+No Docker or collector is required. The process measures `SyncProject` for `project-blue` and exports duration and 250 ms threshold metrics to the console when the exporter is disposed. It supplies its own meter and registers that same instance with OpenTelemetry. The sample disposes the exporter, service provider, and application-owned meter.
+
+### Web examples: reuse the observability stack
+
+If the live demo is already running, reuse its Collector, Prometheus, and Grafana. Otherwise start only the observability services:
+
+```powershell
+docker compose -f .\sample\Observability\Grafana\docker-compose.yml up -d
+```
+
+In separate terminals, run either or both examples:
+
+```powershell
+$env:OTEL_METRIC_EXPORT_INTERVAL = "1000"
+dotnet run --project .\sample\MinApi\SampleMinimalApiSli.csproj
+```
+
+```powershell
+$env:OTEL_METRIC_EXPORT_INTERVAL = "1000"
+dotnet run --project .\sample\WebApiVersioned\SampleVersionedWebApplicationSLI.csproj
+```
+
+Both export to `http://localhost:4317` by default and use HTTP-only loopback launch profiles; no development HTTPS certificate is needed.
+
+| Example | Requests | What to inspect |
+|---|---|---|
+| Minimal API, http://localhost:5201 | `GET /projects/project-blue`; `POST /projects/project-red/sync/slow` | Named operations, project ID, bounded `SyncMode`, and a slow `Success` exceeding 250 ms |
+| Versioned MVC, http://localhost:5202 | `GET /projects/project-blue?api-version=1.0` and `?api-version=2.0` | Same `GetProject` operation and project ID with distinct `http.api.version` values |
+
+Each web sample's `Api.http` file contains ready-to-send requests. Scalar is available at http://localhost:5201/scalar/v1 and http://localhost:5202/scalar/v2 in Development.
+
+All measured project IDs are bounded to `project-blue`, `project-green`, and `project-red`; the Minimal API also constrains sync modes. These examples deliberately opt in only their project endpoints and exclude `/health`; docs endpoints and route misses do not enter their SLO populations. The versioned sample is deterministic, not a second random-incident generator. Use the continuous demo for incidents and recovery.
+
+The dashboard can display these metrics too, but it aggregates services with matching SLI dimensions. If you want the continuous demo's charts in isolation, stop the focused web examples with Ctrl+C. Their service names remain distinct for custom Prometheus queries. The console example exports only to the console.
+
+## Optional API Guidance for Coding Assistants
+
+Each SLI NuGet package carries its own versioned API reference at the package root (`trellis-api-sli*.md`) and a guidance manifest. The packages remain independent of `Trellis.Core`.
+
+Ordinary restore/build does not write `.github/`, `AGENTS.md`, or `.agentdocs/` unless the consuming repository opts into the separate local `Trellis.AgentDocs` tool. After restoring the consuming project or solution, run once from its Git root:
+
+```powershell
+dotnet new tool-manifest --output .config
+dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.20 --tool-manifest .config\dotnet-tools.json
+dotnet tool run agentdocs init <solution-or-project>
+```
+
+Reuse an existing root `.config\dotnet-tools.json` instead of creating another. Restoring a package never activates its guide. `init` lists packages that publish guidance as pending and prints the package IDs to add to `approvedPackages` in `.agentdocs/policy.json`. Add the SLI packages you trust, then run `dotnet tool run agentdocs sync` to install their guides into Git-root `.agentdocs/`; `init` also adds managed instruction pointers.
+
+Guides are on-demand: the generated index lists each with a description, and an agent opens one when its task concerns SLI metrics. After a package upgrade, run `dotnet restore` and `dotnet tool run agentdocs sync`. The helper and tool are preview packages published on NuGet.org.
+
+For maintainers, the three publishing projects use a pinned, private `Trellis.AgentDocs.Packaging` build dependency to generate manifests at pack time. Each project sets `TrellisApiRefDescription`, the one-line "Open when..." topic consumers see. Guides refer to sibling packages by ID rather than by link because every package installs into its own directory. The packaging build target is not included in published SLI packages. Run `pwsh -NoProfile -File build\test-guidance-packages.ps1` after packing to verify payloads and the absence of legacy consumer targets.
+
+## Provider Cancellation Integration
+
+The ASP.NET tests include real mid-flight `HttpClient` cancellation. Real `SqlClient` cancellation requires a dedicated SQL fixture; without `TRELLIS_SLI_SQL_CONNECTION_STRING`, those cases are explicitly skipped. On Windows with SQL Server Express LocalDB installed, run:
+
+```powershell
+dotnet restore Trellis.ServiceLevelIndicators.Asp\tests\Trellis.ServiceLevelIndicators.Asp.Tests.csproj
+pwsh -NoProfile -File build\test-sql-cancellation.ps1
+```
+
+The script creates, starts, stops, and deletes its own uniquely named LocalDB instance. It does not use or modify shared instances. The Windows CI job runs this fixture; provider dependencies are test-only. For another dedicated SQL Server, supply the environment variable and run the ASP.NET tests; the fixture needs permission to inspect `sys.dm_exec_requests` so cancellation occurs after the command is genuinely in flight.
 
 ## Public API Cheat Sheet
 

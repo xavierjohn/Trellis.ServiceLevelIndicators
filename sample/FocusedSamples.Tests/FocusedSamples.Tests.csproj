@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <ProjectReference Include="..\MinApi\SampleMinimalApiSli.csproj" Aliases="minimal" />
+    <ProjectReference Include="..\WebApiVersioned\SampleVersionedWebApplicationSLI.csproj" Aliases="versioned" />
+  </ItemGroup>
+</Project>
