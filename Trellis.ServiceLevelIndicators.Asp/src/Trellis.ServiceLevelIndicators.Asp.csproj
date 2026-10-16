@@ -2,10 +2,10 @@
     <PropertyGroup>
         <PackageReadmeFile>README.md</PackageReadmeFile>
         <RootNamespace>Trellis.ServiceLevelIndicators</RootNamespace>
-        <Description>ASP.NET Core middleware for emitting Service Level Indicator (SLI) latency metrics in milliseconds for MVC and Minimal API endpoints. Supports service-specific dimensions, configurable HTTP outcomes, abort telemetry, and opt-in latency threshold counts.</Description>
+        <Description>ASP.NET Core middleware for emitting Service Level Indicator (SLI) latency metrics in milliseconds for MVC and Minimal API endpoints. Supports endpoint exclusions, service-specific dimensions, configurable HTTP outcomes, abort telemetry, and opt-in latency threshold counts.</Description>
         <PackageTags>sli;slo;aspnetcore;middleware;opentelemetry;metrics;observability;telemetry;trellis</PackageTags>
         <TrellisApiRefName>sli-asp</TrellisApiRefName>
-        <TrellisApiRefDescription>Open when configuring ASP.NET Core SLI middleware, MVC/Minimal API dimensions, HTTP classifiers, request-abort telemetry, or cancellation-safe enrichment.</TrellisApiRefDescription>
+        <TrellisApiRefDescription>Open when configuring ASP.NET Core SLI middleware, endpoint exclusions, MVC/Minimal API dimensions, HTTP classifiers, request-abort telemetry, or cancellation-safe enrichment.</TrellisApiRefDescription>
     </PropertyGroup>
     <ItemGroup>
         <None Include="README.md" Pack="true" PackagePath="\" />

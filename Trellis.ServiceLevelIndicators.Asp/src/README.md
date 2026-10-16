@@ -2,7 +2,7 @@
 
 [![NuGet Package](https://img.shields.io/nuget/v/Trellis.ServiceLevelIndicators.Asp.svg)](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp)
 
-ASP.NET Core middleware that **automatically emits Service Level Indicator (SLI) latency metrics in milliseconds** for every API operation. Built on the [Trellis.ServiceLevelIndicators](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators) core library, it helps teams move from generic request timing to service-specific latency metrics with dimensions such as operation, customer, location, and status.
+ASP.NET Core middleware that **automatically emits Service Level Indicator (SLI) latency metrics in milliseconds** for eligible API operations. Built on the [Trellis.ServiceLevelIndicators](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators) core library, it helps teams move from generic request timing to service-specific latency metrics with dimensions such as operation, customer, location, and status.
 
 For API versioning support, add [Trellis.ServiceLevelIndicators.Asp.ApiVersioning](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp.ApiVersioning).
 
@@ -135,6 +135,36 @@ A trailing slash is trimmed from the resolved template (the literal root `/` is 
 If none of those yield a bounded template (e.g. a synthetic problem-details endpoint emitted by Asp.Versioning when the API version is invalid), the middleware emits the sentinel `"<METHOD> <unrouted>"` and logs a one-time warning per endpoint name. **If you see `<unrouted>` in your metrics, an endpoint is missing a route template — fix it by adding an attribute route or moving to a routed endpoint.**
 
 ## Customizations
+
+### Exclude endpoints from automatic measurement
+
+Exclude individual endpoints, health checks, or whole route groups:
+
+```csharp
+app.MapHealthChecks("/health")
+    .ExcludeFromServiceLevelIndicator();
+
+app.MapGet("/diagnostics", () => Results.Ok())
+    .ExcludeFromServiceLevelIndicator();
+
+var internalApi = app.MapGroup("/internal")
+    .ExcludeFromServiceLevelIndicator();
+internalApi.MapGet("/status", () => Results.Ok());
+```
+
+For MVC, apply the attribute to an action or controller:
+
+```csharp
+[HttpGet("diagnostics")]
+[ExcludeFromServiceLevelIndicator]
+public IActionResult Diagnostics() => Ok();
+```
+
+Controller attributes and route-group metadata are inherited. Exclusion wins over automatic emission and explicit SLI inclusion metadata, in either registration order; a child inclusion cannot override its parent's exclusion.
+
+Excluded requests still execute normally, but skip the SLI scope, feature attachment, HTTP classification, and all enrichments. They emit no automatic duration, threshold, or measurement-related diagnostic counts, including when the handler throws or the request is aborted. Unlike returning `Ignored` from a normal-response classifier, this excludes the entire automatic measurement path.
+
+Other ASP.NET Core/Application Insights telemetry is unchanged. Explicit core measurements remain available. `HttpContext.TryGetMeasuredOperation(...)` returns false on an excluded endpoint unless application code supplies its own feature.
 
 ### HTTP method dimension
 

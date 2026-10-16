@@ -4,7 +4,7 @@ using System.Reflection;
 using Microsoft.AspNetCore.Builder;
 
 /// <summary>
-/// Extension methods for adding SLI metadata to Minimal API endpoints.
+/// Extension methods for configuring SLI metadata on endpoints and route groups.
 /// </summary>
 public static class EndpointBuilderExtensions
 {
@@ -22,6 +22,20 @@ public static class EndpointBuilderExtensions
         builder.WithMetadata(new ServiceLevelIndicatorAttribute() { Operation = operation });
         builder.Finally(AddSliMetadata);
         return builder;
+    }
+
+    /// <summary>
+    /// Excludes an endpoint or route group from automatic SLI measurement.
+    /// Exclusion takes precedence over automatic emission and explicit SLI inclusion metadata.
+    /// </summary>
+    /// <typeparam name="TBuilder">The endpoint convention builder type.</typeparam>
+    /// <param name="builder">The endpoint or route-group builder.</param>
+    /// <returns>The <paramref name="builder"/> for chaining.</returns>
+    public static TBuilder ExcludeFromServiceLevelIndicator<TBuilder>(this TBuilder builder)
+        where TBuilder : notnull, IEndpointConventionBuilder
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        return builder.WithMetadata(new ExcludeFromServiceLevelIndicatorAttribute());
     }
 
     private static void AddSliMetadata(EndpointBuilder endpoint)

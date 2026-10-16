@@ -94,11 +94,27 @@ Singleton service that creates and records SLI metrics using an OpenTelemetry `H
 | `public MeasuredOperation StartMeasuring(string operation, params KeyValuePair<string, object?>[] attributes)` | `MeasuredOperation` | Starts a stopwatch-backed measurement; dispose the returned object to record the elapsed time as a metric. |
 | `public void Measure(string operation, Action action, params KeyValuePair<string, object?>[] attributes)` | `void` | Measures a synchronous operation and infers `Success`, `Failure`, or `Ignored` for `OperationCanceledException`. |
 | `public T Measure<T>(string operation, Func<T> action, params KeyValuePair<string, object?>[] attributes)` | `T` | Measures a synchronous operation and returns its result. |
+| `public T Measure<T>(string operation, Func<T> action, Func<T, SliOutcome> classifyOutcome, params KeyValuePair<string, object?>[] attributes)` | `T` | Classifies a successfully returned value and returns that same value. |
 | `public Task MeasureAsync(string operation, Func<Task> action, params KeyValuePair<string, object?>[] attributes)` | `Task` | Measures an asynchronous operation and infers outcome before rethrowing exceptions. |
 | `public Task<T> MeasureAsync<T>(string operation, Func<Task<T>> action, params KeyValuePair<string, object?>[] attributes)` | `Task<T>` | Measures an asynchronous operation and returns its result. |
+| `public Task<T> MeasureAsync<T>(string operation, Func<Task<T>> action, Func<T, SliOutcome> classifyOutcome, params KeyValuePair<string, object?>[] attributes)` | `Task<T>` | Awaits the action, classifies its result synchronously, and returns that same result. |
 | `public void Dispose()` | `void` | Disposes the internally-created `Meter` if this instance created it; never disposes a user-supplied meter. Idempotent. Normally invoked by the DI container at host shutdown. |
 | `public static string CreateCustomerResourceId(Guid serviceId)` | `string` | Builds a `ServiceTreeId://<guid>` customer resource id. Throws `ArgumentNullException` if `serviceId` is `Guid.Empty`. |
 | `public static string CreateLocationId(string cloud, string? region = null, string? zone = null)` | `string` | Builds an `ms-loc://az/<cloud>/<region>/<zone>` location id, omitting empty segments. |
+
+**Result selectors.** `classifyOutcome` runs once after successful action completion, including for null results. Value types and application-defined result types are supported; no Trellis Results package is required. Both delegates are required. Action or selector exceptions propagate and record `Failure`; `OperationCanceledException` records `Ignored`. An undefined selector outcome throws `ArgumentOutOfRangeException` and records `Failure`. A failed action never invokes the selector. Both duration and configured threshold metrics use the selected outcome and supplied attributes. Existing overloads without selectors still infer `Success` on normal completion.
+
+Selector execution is included in the measured duration and threshold comparisons; keep classification cheap and synchronous.
+
+```csharp
+var validation = sli.Measure("ValidateOrder", () => ValidateOrder(order),
+    result => result.IsValid ? SliOutcome.Success : SliOutcome.ClientError);
+
+var saved = await sli.MeasureAsync("SaveOrder", () => SaveOrderAsync(order, ct),
+    result => result.IsSuccess ? SliOutcome.Success : SliOutcome.Failure);
+```
+
+The functions and result types in this example are application-defined.
 
 ---
 
@@ -122,7 +138,7 @@ Bound via `IOptions<ServiceLevelIndicatorOptions>`. `LocationId` and `DurationIn
 | `DurationInstrumentName` | `string` | `"operation.duration"` | **Required.** Histogram instrument name. Must be non-empty. |
 | `LatencyThresholds` | `IList<TimeSpan>` (get-only) | Empty | Startup-only positive, distinct, whole-millisecond thresholds. Snapshotted at construction. Enables the fixed-name threshold counter when nonempty. |
 | `ActivityStatusCodeAttributeName` | `string` | `"activity.status.code"` | Obsolete compatibility option. Activity status is no longer emitted as a metric dimension. |
-| `AutomaticallyEmitted` | `bool` | `true` | When `false`, only operations explicitly opted-in (e.g. via the `[ServiceLevelIndicator]` attribute in the ASP package) emit metrics. |
+| `AutomaticallyEmitted` | `bool` | `true` | Controls ASP.NET automatic emission; when false, endpoints must explicitly opt in. Exclusion metadata takes precedence in either mode. Manual core measurements are unaffected. |
 
 ---
 

@@ -45,8 +45,10 @@ public class ServiceLevelIndicatorOptions
     public string ActivityStatusCodeAttributeName { get; set; } = "activity.status.code";
 
     /// <summary>
-    /// Automatically emit for all API methods.
-    /// If false, use the ServiceLevelIndicator Attribute to emit.
+    /// Automatically measure eligible ASP.NET Core endpoints.
+    /// If false, endpoints must opt in with the ServiceLevelIndicator attribute or endpoint metadata.
+    /// Explicit endpoint exclusion takes precedence in either mode.
+    /// Manual core measurements are unaffected.
     /// </summary>
     public bool AutomaticallyEmitted { get; set; } = true;
 }

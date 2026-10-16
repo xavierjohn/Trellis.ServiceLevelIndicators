@@ -1,10 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
         <PackageReadmeFile>README.md</PackageReadmeFile>
-        <Description>Core library for emitting Service Level Indicator (SLI) latency metrics in milliseconds from .NET applications via System.Diagnostics.Metrics and OpenTelemetry. Provides measured operation scopes, outcome helpers, custom dimensions, and opt-in latency threshold counters.</Description>
+        <Description>Core library for emitting Service Level Indicator (SLI) latency metrics in milliseconds from .NET applications via System.Diagnostics.Metrics and OpenTelemetry. Provides measured operation scopes, result-based outcome helpers, custom dimensions, and opt-in latency threshold counters.</Description>
         <PackageTags>sli;slo;opentelemetry;metrics;observability;telemetry;trellis</PackageTags>
         <TrellisApiRefName>sli</TrellisApiRefName>
-        <TrellisApiRefDescription>Open when measuring .NET operations with SLI durations, outcomes, custom meters, or latency-threshold counters outside ASP.NET Core.</TrellisApiRefDescription>
+        <TrellisApiRefDescription>Open when measuring .NET operations with SLI durations, result-based outcomes, custom meters, or latency-threshold counters outside ASP.NET Core.</TrellisApiRefDescription>
     </PropertyGroup>
     <ItemGroup>
         <None Include="README.md" Pack="true" PackagePath="\" />
