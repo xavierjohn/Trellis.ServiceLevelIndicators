@@ -4,7 +4,7 @@
 
 Implemented in the pre-1.0 metric contract finalization.
 
-The first-preview additions from [TFR-26/27/29](sli-feature-requests-proposal.md) are implemented locally: default-aware HTTP classification, explicit abort telemetry, cancellation-safe API-version enrichment, and opt-in threshold counting. Preview publication and consumer deployment validation remain separate rollout steps.
+The first-preview additions for TFR-26/27/29 shipped in `10.0.0-preview.37` and completed consumer acceptance. TFR-28 result selectors and TFR-30 endpoint exclusion are implemented in the source tree but are not part of preview.37.
 
 ## Context
 
@@ -170,15 +170,17 @@ Core APIs should include outcome-oriented methods such as:
 measuredOperation.SetOutcome(SliOutcome.Success);
 ```
 
-Core `Measure(...)` and `MeasureAsync(...)` helpers should infer:
+Core `Measure(...)` and `MeasureAsync(...)` helpers without a result selector infer:
 
 - `Success` on normal completion.
 - `Failure` on exception.
 - `Ignored` on `OperationCanceledException`.
 
+Generic sync and `Task<T>` overloads also accept `Func<T, SliOutcome> classifyOutcome`. The selector runs once after successful completion, accepts the original result including null, and returns a defined outcome. The original result is returned unchanged. Both metrics use the selected outcome; action exceptions bypass the selector. Action/selector exceptions propagate with `Failure`, while `OperationCanceledException` records `Ignored`. Undefined selector outcomes are rejected before assignment and record `Failure`. Existing overloads keep their previous inference.
+
 Core helpers are not ASP.NET-specific and do not detect client disconnects. ASP.NET middleware maps `HttpContext.RequestAborted` / request-aborted cancellation to `Ignored`; application/business cancellations remain configurable.
 
-Result-aware helpers for Trellis `Result<T>` belong in the optional `Trellis.ServiceLevelIndicators.Results` package, not in the core package.
+Automatic Trellis `Result<T>` mapping belongs in a future optional `Trellis.ServiceLevelIndicators.Results` adapter, not in the core package. Generic core result selectors remain type-agnostic.
 
 ## Activity correlation
 
@@ -266,12 +268,13 @@ Internal behavior:
 
 ### Helper APIs
 
-Core helper APIs should infer outcomes:
+Core helper APIs infer outcomes:
 
 | Result | Outcome |
 |---|---|
-| Normal completion | `Success` |
-| Exception | `Failure` |
+| Normal completion without a result selector | `Success` |
+| Normal completion with a result selector | Selected, defined `SliOutcome` |
+| Action or selector exception | `Failure` |
 | `OperationCanceledException` | `Ignored` |
 
 Helpers rethrow exceptions and cancellations after setting the inferred outcome.
@@ -285,6 +288,7 @@ Middleware owns ASP.NET request measurement. Core helpers and ASP.NET middleware
 
 Middleware should:
 
+- skip automatic measurement for `[ExcludeFromServiceLevelIndicator]` or `.ExcludeFromServiceLevelIndicator()` metadata before resolving operation/attributes, starting a scope, attaching a feature, or running enrichments,
 - resolve `Operation` from explicit metadata, route template, then uppercase `<METHOD> <unrouted>`,
 - set `CustomerResourceId` from endpoint metadata when present,
 - default missing customer resource to `Unknown`,
@@ -292,6 +296,8 @@ Middleware should:
 - emit HTTP and abort dimensions with the status-presence rules above,
 - run enrichments before recording, skipping canceled work unless it explicitly opts into bounded metadata access,
 - rethrow escaping exceptions, preserving their stack traces and abort-first outcome.
+
+Exclusion applies to MVC controllers/actions, Minimal API endpoints, route groups, and health-check mappings. Controller/action attributes and group metadata are inherited; exclusion wins over automatic and explicit inclusion. Excluded endpoints produce no automatic duration, threshold, or measurement-related diagnostic counts on any completion path. Response behavior, platform telemetry, and explicit core measurements are unchanged.
 
 ### Classifier extensibility
 

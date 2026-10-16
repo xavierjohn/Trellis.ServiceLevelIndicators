@@ -145,7 +145,8 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
     }
 
     private bool ShouldEmitMetrics(EndpointMetadataCollection metadata) =>
-        _serviceLevelIndicator.ServiceLevelIndicatorOptions.AutomaticallyEmitted || GetSliAttribute(metadata) is not null;
+        metadata.GetMetadata<ExcludeFromServiceLevelIndicatorAttribute>() is null &&
+        (_serviceLevelIndicator.ServiceLevelIndicatorOptions.AutomaticallyEmitted || GetSliAttribute(metadata) is not null);
 
     private static ServiceLevelIndicatorAttribute? GetSliAttribute(EndpointMetadataCollection metaData) =>
         metaData.GetMetadata<ServiceLevelIndicatorAttribute>();

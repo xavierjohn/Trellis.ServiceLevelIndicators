@@ -60,6 +60,8 @@ This makes the library useful when generic HTTP server metrics are not enough, e
 
 ## NuGet Packages
 
+**Source-tree additions after `10.0.0-preview.37`:** result-based outcome selectors and endpoint exclusions require a package containing these changes; they are not in preview.37.
+
 - **Trellis.ServiceLevelIndicators**
 
   This library can be used to emit SLI for all .net core applications, where each operation is measured.
@@ -217,6 +219,22 @@ void MeasureCodeBlock(ServiceLevelIndicator serviceLevelIndicator)
 }
 ```
 
+Classify failures returned as values without changing the returned value:
+
+```csharp
+var validation = sli.Measure(
+    "ValidateOrder",
+    () => ValidateOrder(order),
+    result => result.IsValid ? SliOutcome.Success : SliOutcome.ClientError);
+
+var saved = await sli.MeasureAsync(
+    "SaveOrder",
+    () => SaveOrderAsync(order, cancellationToken),
+    result => result.IsSuccess ? SliOutcome.Success : SliOutcome.Failure);
+```
+
+The functions and result types are application-defined; the core has no Trellis Results dependency. Selectors run once after successful completion, including for null results. The original result is returned. Action or selector exceptions propagate and record `Failure`; `OperationCanceledException` records `Ignored`. Undefined selector outcomes are rejected and record `Failure`. Existing overloads without a selector retain their success-on-completion behavior.
+
 ## Operational Guidance
 
 ### Threshold latency objectives
@@ -252,8 +270,28 @@ The same discipline applies to `[Measure]` parameters and any custom attributes 
 
 ## ASP.NET Core Customizations
 
-Once the Prerequisites are done, all controllers will emit SLI information.
+Once the prerequisites are done, eligible controllers/actions emit SLI information unless excluded.
 The default operation name is the HTTP method plus the route template (placeholders such as `{id}` are preserved). The full resolution order is described under **Trellis.ServiceLevelIndicators.Asp** above.
+
+### Exclude endpoints from automatic measurement
+
+```csharp
+app.MapHealthChecks("/health")
+    .ExcludeFromServiceLevelIndicator();
+
+app.MapGet("/diagnostics", () => Results.Ok())
+    .ExcludeFromServiceLevelIndicator();
+
+var internalApi = app.MapGroup("/internal")
+    .ExcludeFromServiceLevelIndicator();
+internalApi.MapGet("/status", () => Results.Ok());
+```
+
+For MVC, put `[ExcludeFromServiceLevelIndicator]` on an action or controller. Controller and route-group exclusions apply to their child endpoints and win over automatic emission and explicit SLI inclusion metadata, regardless of registration order.
+
+Exclusion happens before starting a scope, attaching the SLI feature, classification, or enrichment. The request emits no automatic duration, threshold, or measurement-related diagnostic counts, including on exception and abort paths. This is stronger than classifying a normal response as `Ignored`. Endpoint behavior and other ASP.NET Core/Application Insights telemetry are unchanged; explicit core measurements remain available.
+
+### Customize HTTP classification
 
 Change one normal-response mapping without copying the defaults:
 

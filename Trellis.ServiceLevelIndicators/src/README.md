@@ -83,6 +83,28 @@ using var op = sli.StartMeasuring("ProcessOrder", attribute);
 
 Custom attribute names must be unique and must not reuse SLI-reserved tags: `CustomerResourceId`, `LocationId`, `Operation`, `Outcome`, `activity.status.code`, `http.request.method`, `http.response.status.code`, `sli.request.aborted`, `sli.request.abort_exception`, `sli.latency.threshold_ms`, or `sli.latency.result`.
 
+### Classify returned values
+
+Use a synchronous result selector when an operation returns a failure value instead of throwing:
+
+```csharp
+var validation = sli.Measure(
+    "ValidateOrder",
+    () => ValidateOrder(order),
+    result => result.IsValid ? SliOutcome.Success : SliOutcome.ClientError);
+
+var saved = await sli.MeasureAsync(
+    "SaveOrder",
+    () => SaveOrderAsync(order, cancellationToken),
+    result => result.IsSuccess ? SliOutcome.Success : SliOutcome.Failure);
+```
+
+The functions and result types are application-defined. The core accepts any result type, including value types and nullable results, without a Trellis Results dependency. The selector runs once after the action completes successfully, and the helper returns the original value or object.
+
+Selector execution is included in the measured duration and threshold comparisons, so keep classification cheap and synchronous.
+
+Both overloads accept the same trailing custom attributes as the existing helpers. Action and selector exceptions propagate and record `Failure`; `OperationCanceledException` records `Ignored`. An undefined selector outcome is rejected and records `Failure`. If the action throws, the selector is not invoked. Existing overloads without a selector still infer `Success` on normal completion.
+
 ## Emitted Metrics
 
 By default, a meter named `Trellis.SLI` emits the `operation.duration` histogram in milliseconds. If you configure `ServiceLevelIndicatorOptions.Meter`, metrics are emitted from that meter instead.
@@ -143,6 +165,8 @@ For a fixed meter/resource scope, `N` thresholds and `P` projected base-tag comb
 | Type / Method | Description |
 |---------------|-------------|
 | `ServiceLevelIndicator.StartMeasuring(operation, attributes)` | Start a measured operation scope |
+| `ServiceLevelIndicator.Measure<T>(operation, action, classifyOutcome, attributes)` | Measure a synchronous action, classify its result, and return that same result |
+| `ServiceLevelIndicator.MeasureAsync<T>(operation, action, classifyOutcome, attributes)` | Await a `Task<T>`, classify its result synchronously, and return that same result |
 | `MeasuredOperation.SetOutcome(outcome)` | Set the SLI outcome |
 | `MeasuredOperation.AddAttribute(name, value)` | Add a custom metric attribute |
 | `MeasuredOperation.CustomerResourceId` | Get/set the customer resource ID |

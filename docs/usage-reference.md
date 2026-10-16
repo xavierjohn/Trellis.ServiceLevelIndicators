@@ -2,6 +2,8 @@
 
 This document is a compact reference for choosing the correct package and wiring it into a .NET application.
 
+**Source-tree availability:** result selectors and endpoint exclusion are additions after `10.0.0-preview.37`; use a package containing these changes. They are not available in preview.37.
+
 ## Package Matrix
 
 | Scenario | Package | Purpose |
@@ -76,6 +78,26 @@ Direct recording is also available when you already know the elapsed time. `Reco
 ```csharp
 sli.Record("ProcessOrder", elapsedTime: 42);
 ```
+
+### Classify returned values
+
+Add a synchronous selector when an action reports failure through its result:
+
+```csharp
+var validation = sli.Measure(
+    "ValidateOrder",
+    () => ValidateOrder(order),
+    result => result.IsValid ? SliOutcome.Success : SliOutcome.ClientError);
+
+var saved = await sli.MeasureAsync(
+    "SaveOrder",
+    () => SaveOrderAsync(order, cancellationToken),
+    result => result.IsSuccess ? SliOutcome.Success : SliOutcome.Failure);
+```
+
+The functions and result types are application code; the core is not coupled to Trellis Results. The selector runs once after successful completion, receives null when that is the returned result, and must return a defined `SliOutcome`. The original value or object is returned unchanged. Both helpers accept trailing custom attributes and feed both duration and configured threshold metrics.
+
+Action and selector exceptions propagate and record `Failure`; `OperationCanceledException` records `Ignored`. Undefined selector values are rejected and record `Failure`. If the action fails, the selector is not invoked. Existing overloads without a selector retain success-on-completion inference.
 
 ## Threshold Latency Objectives
 
@@ -261,6 +283,34 @@ app.MapGet("/orders/{customerId}/{orderType}",
     .AddServiceLevelIndicator("GetOrder");
 ```
 
+## Exclude Endpoints from Automatic SLI Measurement
+
+```csharp
+app.MapHealthChecks("/health")
+    .ExcludeFromServiceLevelIndicator();
+
+app.MapGet("/diagnostics", () => Results.Ok())
+    .ExcludeFromServiceLevelIndicator();
+
+var internalApi = app.MapGroup("/internal")
+    .ExcludeFromServiceLevelIndicator();
+internalApi.MapGet("/status", () => Results.Ok());
+```
+
+For MVC:
+
+```csharp
+[HttpGet("diagnostics")]
+[ExcludeFromServiceLevelIndicator]
+public IActionResult Diagnostics() => Ok();
+```
+
+The attribute also works on controller classes, including inherited controllers/actions. Route-group exclusions apply to nested groups and child endpoints. Exclusion takes precedence over automatic emission and explicit SLI inclusion, regardless of registration order.
+
+The exclusion check occurs before starting a scope, attaching the SLI feature, classification, and enrichment. No automatic SLI histogram, threshold, or measurement-related diagnostic counts are emitted, even if the handler fails or aborts. A classifier returning `Ignored` only changes a normal completion's outcome and is not equivalent to exclusion.
+
+The endpoint still executes and other ASP.NET Core/Application Insights telemetry is unchanged. Manual core measurements are unaffected. Use `TryGetMeasuredOperation(...)` in shared code because excluded endpoints do not have an automatically attached feature.
+
 ## API Versioning Package
 
 Install:
@@ -378,6 +428,8 @@ Core package:
 - `AddServiceLevelIndicatorInstrumentation(Meter meter)`
 - `ServiceLevelIndicator.StartMeasuring(...)`
 - `ServiceLevelIndicator.Record(...)`
+- `ServiceLevelIndicator.Measure<T>(operation, action, classifyOutcome, attributes)`
+- `ServiceLevelIndicator.MeasureAsync<T>(operation, action, classifyOutcome, attributes)`
 - `ServiceLevelIndicatorOptions.LatencyThresholds`
 - `ServiceLevelIndicator.CreateLocationId(...)`
 - `ServiceLevelIndicator.CreateCustomerResourceId(...)`
@@ -391,6 +443,8 @@ ASP.NET Core package:
 - `IServiceLevelIndicatorBuilder.Enrich(...)`
 - `IServiceLevelIndicatorBuilder.EnrichAsync(...)`
 - `EndpointConventionBuilder.AddServiceLevelIndicator(...)`
+- `EndpointConventionBuilder.ExcludeFromServiceLevelIndicator()`
+- `[ExcludeFromServiceLevelIndicator]` on MVC controllers/actions
 - `HttpContext.GetMeasuredOperation()`
 - `HttpContext.TryGetMeasuredOperation(...)`
 

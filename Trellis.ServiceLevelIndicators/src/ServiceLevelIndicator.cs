@@ -243,15 +243,39 @@ public sealed class ServiceLevelIndicator : IDisposable
     /// <summary>
     /// Measures a synchronous operation and returns its result.
     /// </summary>
-    public T Measure<T>(string operation, Func<T> action, params KeyValuePair<string, object?>[] attributes)
+    public T Measure<T>(string operation, Func<T> action, params KeyValuePair<string, object?>[] attributes) =>
+        Measure(operation, action, static _ => SliOutcome.Success, attributes);
+
+    /// <summary>
+    /// Measures a synchronous operation, classifies its returned value, and returns that same value.
+    /// </summary>
+    /// <param name="operation">The bounded operation name.</param>
+    /// <param name="action">The operation to measure.</param>
+    /// <param name="classifyOutcome">Classifies the result after the action completes successfully.</param>
+    /// <param name="attributes">Additional measurement attributes.</param>
+    /// <returns>The original result returned by <paramref name="action"/>.</returns>
+    /// <remarks>
+    /// Action and classifier exceptions propagate and record Failure. OperationCanceledException records Ignored.
+    /// The classifier must return a defined SliOutcome.
+    /// Classifier execution is included in the measured duration; keep classification cheap and synchronous.
+    /// </remarks>
+    public T Measure<T>(
+        string operation,
+        Func<T> action,
+        Func<T, SliOutcome> classifyOutcome,
+        params KeyValuePair<string, object?>[] attributes)
     {
         ArgumentNullException.ThrowIfNull(action);
+        ArgumentNullException.ThrowIfNull(classifyOutcome);
 
         using var measuredOperation = StartMeasuring(operation, attributes);
         try
         {
             var result = action();
-            measuredOperation.SetInferredOutcome(SliOutcome.Success);
+            var outcome = classifyOutcome(result);
+            // Validate before assignment so invalid selector results record Failure.
+            _ = ToWireValue(outcome);
+            measuredOperation.SetInferredOutcome(outcome);
             return result;
         }
         catch (OperationCanceledException)
@@ -294,15 +318,39 @@ public sealed class ServiceLevelIndicator : IDisposable
     /// <summary>
     /// Measures an asynchronous operation and returns its result.
     /// </summary>
-    public async Task<T> MeasureAsync<T>(string operation, Func<Task<T>> action, params KeyValuePair<string, object?>[] attributes)
+    public Task<T> MeasureAsync<T>(string operation, Func<Task<T>> action, params KeyValuePair<string, object?>[] attributes) =>
+        MeasureAsync(operation, action, static _ => SliOutcome.Success, attributes);
+
+    /// <summary>
+    /// Measures an asynchronous operation, classifies its returned value, and returns that same value.
+    /// </summary>
+    /// <param name="operation">The bounded operation name.</param>
+    /// <param name="action">The asynchronous operation to measure.</param>
+    /// <param name="classifyOutcome">Classifies the result after the action completes successfully.</param>
+    /// <param name="attributes">Additional measurement attributes.</param>
+    /// <returns>The original result returned by <paramref name="action"/>.</returns>
+    /// <remarks>
+    /// Action and classifier exceptions propagate and record Failure. OperationCanceledException records Ignored.
+    /// The synchronous classifier must return a defined SliOutcome.
+    /// Classifier execution is included in the measured duration; keep classification cheap.
+    /// </remarks>
+    public async Task<T> MeasureAsync<T>(
+        string operation,
+        Func<Task<T>> action,
+        Func<T, SliOutcome> classifyOutcome,
+        params KeyValuePair<string, object?>[] attributes)
     {
         ArgumentNullException.ThrowIfNull(action);
+        ArgumentNullException.ThrowIfNull(classifyOutcome);
 
         using var measuredOperation = StartMeasuring(operation, attributes);
         try
         {
             var result = await action().ConfigureAwait(false);
-            measuredOperation.SetInferredOutcome(SliOutcome.Success);
+            var outcome = classifyOutcome(result);
+            // Validate before assignment so invalid selector results record Failure.
+            _ = ToWireValue(outcome);
+            measuredOperation.SetInferredOutcome(outcome);
             return result;
         }
         catch (OperationCanceledException)

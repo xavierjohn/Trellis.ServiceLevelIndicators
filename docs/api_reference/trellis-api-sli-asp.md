@@ -1,7 +1,7 @@
 ---
 package: Trellis.ServiceLevelIndicators.Asp
 namespaces: [Trellis.ServiceLevelIndicators]
-types: [IServiceLevelIndicatorBuilder, ServiceLevelIndicatorCoreServiceCollectionExtensions, ServiceLevelIndicatorServiceCollectionExtensions, ServiceLevelIndicatorHttpOptions, HttpOutcomeClassifier, ServiceLevelIndicatorApplicationBuilderExtensions, EndpointBuilderExtensions, ServiceLevelIndicatorAttribute, CustomerResourceIdAttribute, MeasureAttribute, CustomerResourceIdMetadata, MeasureMetadata, WebEnrichmentContext, IServiceLevelIndicatorFeature, HttpContextExtensions]
+types: [IServiceLevelIndicatorBuilder, ServiceLevelIndicatorCoreServiceCollectionExtensions, ServiceLevelIndicatorServiceCollectionExtensions, ServiceLevelIndicatorHttpOptions, HttpOutcomeClassifier, ServiceLevelIndicatorApplicationBuilderExtensions, EndpointBuilderExtensions, ServiceLevelIndicatorAttribute, ExcludeFromServiceLevelIndicatorAttribute, CustomerResourceIdAttribute, MeasureAttribute, CustomerResourceIdMetadata, MeasureMetadata, WebEnrichmentContext, IServiceLevelIndicatorFeature, HttpContextExtensions]
 version: v10
 last_verified: 2026-10-15
 audience: [llm]
@@ -11,7 +11,7 @@ audience: [llm]
 
 **Package:** `Trellis.ServiceLevelIndicators.Asp`  
 **Namespace:** `Trellis.ServiceLevelIndicators`  
-**Purpose:** ASP.NET Core integration for `Trellis.ServiceLevelIndicators`. Provides middleware that automatically emits SLI latency metrics for every request, MVC and Minimal API attribute conventions for tagging the customer resource id and additional measured route values, and an enrichment pipeline for adding custom attributes (e.g. HTTP method, API version).
+**Purpose:** ASP.NET Core integration for `Trellis.ServiceLevelIndicators`. Provides middleware that automatically emits SLI latency metrics for eligible routed requests, endpoint exclusions, MVC and Minimal API attribute conventions for tagging the customer resource id and additional measured route values, and an enrichment pipeline for adding custom attributes (e.g. HTTP method, API version).
 
 For API-versioning-specific enrichment, see the `Trellis.ServiceLevelIndicators.Asp.ApiVersioning` reference, when installed.
 
@@ -156,13 +156,14 @@ public static class ServiceLevelIndicatorApplicationBuilderExtensions
 public static class EndpointBuilderExtensions
 ```
 
-Minimal API integration.
+Endpoint and route-group integration.
 
 **Methods**
 
 | Signature | Returns | Description |
 |---|---|---|
 | `public static TBuilder AddServiceLevelIndicator<TBuilder>(this TBuilder builder, string? operation = default) where TBuilder : notnull, IEndpointConventionBuilder` | `TBuilder` | Marks a Minimal API endpoint for SLI emission. Scans the handler delegate's parameters for `[CustomerResourceId]` and `[Measure]` and projects them into endpoint metadata. When `operation` is `null`, the route template is used. |
+| `public static TBuilder ExcludeFromServiceLevelIndicator<TBuilder>(this TBuilder builder) where TBuilder : notnull, IEndpointConventionBuilder` | `TBuilder` | Excludes an endpoint, health-check mapping, or route group. Returns the original builder type for chaining; throws for a null builder. |
 
 ---
 
@@ -189,6 +190,28 @@ Marks a controller or action as opting in to SLI emission. Required only when `S
 |---|---|
 | `public ServiceLevelIndicatorAttribute()` | Use the route template as the operation name. |
 | `public ServiceLevelIndicatorAttribute(string operation)` | Use a custom operation name. |
+
+---
+
+### ExcludeFromServiceLevelIndicatorAttribute
+
+```csharp
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method,
+    AllowMultiple = false, Inherited = true)]
+public sealed class ExcludeFromServiceLevelIndicatorAttribute : Attribute
+```
+
+Apply to a controller or action, or use the endpoint-builder extension. Controller/action attributes and route-group metadata are inherited. Exclusion wins over automatic emission and explicit inclusion, regardless of registration order; a child inclusion cannot override a parent exclusion.
+
+The middleware checks exclusion before resolving operation/attributes, starting a scope, attaching a feature, classification, or enrichment. Excluded requests emit no automatic duration, threshold, or measurement-related diagnostic counts, including on failure and abort paths. Their HTTP behavior and other telemetry are unchanged. Explicit core measurements are not disabled.
+
+```csharp
+app.MapHealthChecks("/health").ExcludeFromServiceLevelIndicator();
+var internalApi = app.MapGroup("/internal").ExcludeFromServiceLevelIndicator();
+internalApi.MapGet("/status", () => Results.Ok());
+```
+
+On MVC, use `[ExcludeFromServiceLevelIndicator]` on the action or controller.
 
 ---
 
@@ -326,7 +349,7 @@ public static class HttpContextExtensions
 
 The `ServiceLevelIndicatorMiddleware` (registered by `UseServiceLevelIndicator()`):
 
-1. Reads the resolved endpoint metadata. Skips emission when neither `AutomaticallyEmitted == true` nor a `ServiceLevelIndicatorAttribute` is present.
+1. Reads the resolved endpoint metadata. Skips automatic measurement for exclusion metadata, even when explicit inclusion is also present. Otherwise skips when neither `AutomaticallyEmitted == true` nor a `ServiceLevelIndicatorAttribute` is present.
 2. Resolves the operation name (custom override via attribute, else route template, else `"<METHOD> <unrouted>"`).
 3. Collects `MeasureMetadata` route values into measurement attributes.
 4. Starts a `MeasuredOperation` and attaches an `IServiceLevelIndicatorFeature` to `HttpContext.Features`.
