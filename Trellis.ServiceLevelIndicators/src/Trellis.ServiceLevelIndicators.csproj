@@ -12,7 +12,11 @@
     <ItemGroup>
       <PackageReference Include="Trellis.AgentDocs.Packaging" PrivateAssets="all" />
       <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+      <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
       <PackageReference Include="Microsoft.Extensions.Options" />
       <PackageReference Include="OpenTelemetry" />
+    </ItemGroup>
+    <ItemGroup>
+      <InternalsVisibleTo Include="Trellis.ServiceLevelIndicators.Asp" />
     </ItemGroup>
 </Project>

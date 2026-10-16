@@ -112,6 +112,8 @@ public sealed class ServiceLevelIndicatorHttpOptions
 
 Neither callback runs on observed request aborts or escaping exceptions.
 
+Callback exceptions, including callback cancellation, and undefined outcomes are warning-logged and fall back to the already-computed built-in status outcome. The lower-priority callback is not tried; enrichment continues and the response is unchanged. Explicit core result-selector errors still propagate.
+
 ### HttpOutcomeClassifier
 
 ```csharp
@@ -355,8 +357,10 @@ The `ServiceLevelIndicatorMiddleware` (registered by `UseServiceLevelIndicator()
 4. Starts a `MeasuredOperation` and attaches an `IServiceLevelIndicatorFeature` to `HttpContext.Features`.
 5. Optionally overrides the customer id from a `CustomerResourceIdMetadata`-tagged route value.
 6. Invokes the next middleware. On an escaping exception without a request abort, sets status to 500 if headers have not started and status is below 500, then rethrows.
-7. In `finally`, classifies abort first, then escaping exception, then normal response; adds HTTP/abort tags as described above. Runs enrichments in registration order, skipping those without `EnrichOnCancellation` after request cancellation. Enrichment exceptions are caught and logged.
-8. Disposes the `MeasuredOperation` (which records the metric) and removes the feature.
+7. In `finally`, classifies abort first, then escaping exception, then normal response; adds HTTP/abort tags as described above. Normal-response classifier faults use the built-in mapping after a warning. Runs enrichments in registration order, skipping those without `EnrichOnCancellation` after request cancellation. Enrichment exceptions are caught and logged.
+8. Removes the feature and disposes the `MeasuredOperation`, attempting recording once without propagating recording failures.
+
+All middleware diagnostic logging is guarded, including route-resolution warnings. A throwing logger is reported through EventSource provider `Trellis-ServiceLevelIndicators`, event 2 (`DiagnosticLoggingFailed`), without replacing handler exceptions or stopping later enrichments. The core reports recording failures through its logger and event 1 (`MeasurementRecordingFailed`); failed disposal is terminal, not retried.
 
 Throws `InvalidOperationException` if a second instance of the middleware tries to attach an SLI feature to the same request.
 

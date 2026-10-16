@@ -245,7 +245,7 @@ Every duration recording emits:
 - `Outcome`
 - any custom dimensions
 
-Custom dimensions must not reuse required names, reserved names, or optional dimensions already present on the measurement. Schema collisions throw immediately. The diagnostics-only rule applies to suspicious values, not to schema collisions.
+Custom dimensions must not reuse required names, reserved names, or optional dimensions already present on the measurement. Supported attribute APIs reject schema collisions immediately. Legacy raw-list mutations are validated at recording time and malformed scope measurements are dropped with diagnostics, without throwing from disposal. The diagnostics-only suspicious-value rule does not permit schema collisions.
 
 ### MeasuredOperation
 
@@ -259,11 +259,13 @@ measuredOperation.SetOutcome(SliOutcome.Success);
 
 Internal behavior:
 
-- Disposing records elapsed milliseconds.
+- Disposing attempts to record elapsed milliseconds once.
 - Disposing records the explicit or inferred `Outcome`.
 - Raw `StartMeasuring(...)`/`Dispose()` cannot detect escaping exceptions and records the explicit/default outcome.
 - Core helpers infer failure for non-cancellation exceptions; HTTP middleware infers failure for escaping exceptions only without an observed request abort.
-- `Dispose()` remains idempotent.
+- `Dispose()` becomes terminal before recording and remains idempotent even on failure or reentrant disposal.
+- Recording failures are warning-logged and reported through EventSource, never retried or thrown over an application exception. Provider failures may leave partial emission.
+- Direct `Record(...)`, `AddAttribute(...)`, and `SetOutcome(...)` validation remains strict; undefined outcomes are rejected before recording side effects.
 - `SetOutcome(...)` after disposal has no effect.
 
 ### Helper APIs
@@ -309,6 +311,14 @@ Global normal-response classifier APIs:
 ```
 
 The first overload retains replacement semantics; the second receives the built-in outcome so callers can preserve defaults. `HttpOutcomeClassifier.ClassifyStatusCode(int)` exposes the default mapper. Last fluent registration wins. With direct options configuration, `ClassifyOutcomeWithDefault` takes precedence over `ClassifyOutcome`. Neither callback runs on an observed abort or escaping exception. Per-route APIs remain deferred.
+
+HTTP classifier exceptions and undefined outcomes are logged and use the already-computed built-in status outcome; enrichment continues. Do not try a lower-priority classifier. This ambient HTTP failure boundary does not change explicit core action/result-selector propagation.
+
+### Configuration and diagnostic failure boundaries
+
+Each indicator copies its supplied options and threshold collection. Effective options retain access to the instance's actual meter, while caller configuration remains unchanged. Reusing options without a supplied meter creates independently owned meters; supplied meters remain caller-owned. Later mutations of the original options do not update an existing indicator.
+
+Scope recording failures use `ILogger<ServiceLevelIndicator>` when available and EventSource provider `Trellis-ServiceLevelIndicators`, event 1 (`MeasurementRecordingFailed`). The original constructor remains supported without a logging dependency in application setup; DI can supply the logger through the additional constructor. All diagnostic logging is guarded. A broken logger emits event 2 (`DiagnosticLoggingFailed`) rather than changing HTTP behavior or masking a primary exception. No metric names, units, or dimensions are added by this policy.
 
 ### API versioning
 

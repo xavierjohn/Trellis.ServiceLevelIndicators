@@ -12,6 +12,7 @@
     <Using Include="Xunit" />
     <Using Include="Trellis.ServiceLevelIndicators.Testing" />
     <Compile Include="$(MSBuildThisFileDirectory)MetricCapture.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)InstrumentationDiagnosticsCapture.cs" />
   </ItemGroup>
 
   <ItemGroup>

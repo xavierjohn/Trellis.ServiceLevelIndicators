@@ -167,6 +167,8 @@ Cumulative Prometheus counter scrapes need `increase`/`rate` semantics instead o
 
 ## Custom Meter Registration
 
+Options are copied at construction, including thresholds; creating an internal meter does not mutate caller configuration. `sli.ServiceLevelIndicatorOptions.Meter` exposes the effective meter. Reusing options without a supplied meter creates independently owned meters. Later changes to the original options do not update an existing instance.
+
 If you provide a custom `Meter` in `ServiceLevelIndicatorOptions`, register that same meter with OpenTelemetry.
 
 ```csharp
@@ -385,9 +387,19 @@ builder.Services.AddServiceLevelIndicator(options => options.LocationId = locati
 
 The application supplies `IsCallerQuotaRejection`: actor quotas may be client errors, but service-capacity rejection should remain failure. `HttpOutcomeClassifier.ClassifyStatusCode(int)` exposes the default mapper. The one-argument overload retains replacement semantics; last fluent registration wins across overloads. With direct options configuration, `ClassifyOutcomeWithDefault` takes precedence over `ClassifyOutcome`. Callbacks apply only to normal completions, not aborts or escaping exceptions.
 
+Callback exceptions and undefined outcomes are warning-logged and use the built-in status outcome; no lower-priority callback is tried, and enrichment continues. HTTP classifier failures do not change response status or replace the handler's completion. Explicit core result-selector exceptions still propagate.
+
 ### Cancellation-safe enrichment
 
 Ordinary `Enrich` and `EnrichAsync` callbacks remain skipped after request cancellation. An `IEnrichment<WebEnrichmentContext>` implementation may opt in with `EnrichOnCancellation => true` only for bounded, cancellation-safe metadata access without I/O. The canceled token is still passed, and skipping an unsafe enrichment does not prevent later safe enrichments. API-version enrichment opts in automatically; known route/resource metadata is also retained.
+
+## Instrumentation Failure Policy
+
+Public `Record(...)`, `AddAttribute(...)`, and `SetOutcome(...)` inputs remain strictly validated. Explicit `Record(...)` provider errors also surface to its caller.
+
+`MeasuredOperation.Dispose()` attempts recording once and reports recording errors without throwing them over the application's result or exception. Invalid legacy raw-attribute mutations drop the measurement. A failing metric provider may leave partial data; no retry or fabricated success is emitted.
+
+Recording warnings use `ILogger<ServiceLevelIndicator>` when available and EventSource provider `Trellis-ServiceLevelIndicators`, event 1 (`MeasurementRecordingFailed`). DI supplies the logger when registered, while the original options-only constructor remains supported. Broken diagnostic loggers are isolated and reported by event 2 (`DiagnosticLoggingFailed`), including in middleware route-resolution, classifier, and enrichment logging.
 
 ## Cardinality Guidance
 

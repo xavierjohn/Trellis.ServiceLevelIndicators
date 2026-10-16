@@ -60,7 +60,7 @@ This makes the library useful when generic HTTP server metrics are not enough, e
 
 ## NuGet Packages
 
-**Source-tree additions after `10.0.0-preview.37`:** result-based outcome selectors and endpoint exclusions require a package containing these changes; they are not in preview.37.
+**Source-tree additions after `10.0.0-preview.37`:** result selectors, endpoint exclusions, and the instrumentation failure policy below require a package containing these changes; they are not in preview.37.
 
 - **Trellis.ServiceLevelIndicators**
 
@@ -268,6 +268,12 @@ The same discipline applies to `[Measure]` parameters and any custom attributes 
 
 `ServiceLevelIndicator` is a sealed `IDisposable` registered as a singleton; the DI container disposes it (and the `Meter` it created) at host shutdown — no manual cleanup needed. A `Meter` you supply via `ServiceLevelIndicatorOptions.Meter` is owned by you and is never disposed by SLI.
 
+Configuration is copied per instance, including thresholds, without modifying caller options. Reusing options without a supplied meter creates independently owned meters. The instance's `ServiceLevelIndicatorOptions` property retains its effective meter; later changes to the original configuration do not update an existing instance.
+
+`MeasuredOperation.Dispose()` attempts recording once and reports errors rather than replacing an application result or exception. Invalid raw-list mutations drop the measurement; provider failures may leave partial data but are not retried. Public `Record`, `AddAttribute`, and `SetOutcome` inputs remain strictly validated, and action/result-selector errors still propagate.
+
+Recording warnings use `ILogger<ServiceLevelIndicator>` when available and EventSource provider `Trellis-ServiceLevelIndicators` (`MeasurementRecordingFailed`, event 1). A throwing diagnostic logger is isolated and reported through `DiagnosticLoggingFailed` (event 2).
+
 ## ASP.NET Core Customizations
 
 Once the prerequisites are done, eligible controllers/actions emit SLI information unless excluded.
@@ -304,6 +310,8 @@ builder.Services.AddServiceLevelIndicator(options => options.LocationId = locati
 ```
 
 `IsCallerQuotaRejection` represents application-specific limiter metadata; capacity rejection should remain `Failure`. The original one-argument replacement classifier remains supported, and the last fluent registration wins. `HttpOutcomeClassifier.ClassifyStatusCode(int)` exposes the built-in mapping. Neither callback overrides abort or escaping-exception handling.
+
+HTTP callback exceptions or undefined outcomes are warning-logged and use the built-in status outcome, without trying a lower-priority callback. Enrichment continues and handler response/exception behavior is preserved, even if diagnostic logging throws. This differs from explicit core result selectors, whose errors still propagate.
 
 - To add API versioning as a dimension use package `Trellis.ServiceLevelIndicators.Asp.ApiVersioning` and enrich the metrics with `AddApiVersion`.
 

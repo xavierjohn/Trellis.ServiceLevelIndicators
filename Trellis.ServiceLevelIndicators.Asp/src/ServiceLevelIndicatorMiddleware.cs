@@ -84,7 +84,9 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
                     }
                     catch (Exception ex)
                     {
-                        LogEnrichmentFailed(ex, enrichment.GetType().Name);
+                        LogSafely(
+                            () => LogEnrichmentFailed(ex, enrichment.GetType().Name),
+                            measuredOperation.Operation, "enrichment", ex);
                     }
                 }
             }
@@ -98,8 +100,25 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
     [LoggerMessage(Level = LogLevel.Warning, Message = "SLI enrichment {EnrichmentType} failed.")]
     partial void LogEnrichmentFailed(Exception ex, string enrichmentType);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SLI HTTP outcome classifier failed; using the built-in status-code classification.")]
+    partial void LogClassifierFailed(Exception ex);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "SLI middleware could not resolve a route template for endpoint {Endpoint}; emitting bounded sentinel '<unrouted>' to avoid metric cardinality explosion. Set [ServiceLevelIndicator(Operation = \"...\")] or use a routed endpoint to fix this.")]
     partial void LogMissingRouteTemplate(string endpoint);
+
+    private static void LogSafely(
+        Action log, string operation, string stage, Exception? originalException = null)
+    {
+        try
+        {
+            log();
+        }
+        catch (Exception loggingException)
+        {
+            ServiceLevelIndicatorEventSource.Log.ReportLoggingFailure(
+                operation, stage, originalException, loggingException);
+        }
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void SetCustomerResourceIdFromAttribute(HttpContext context, EndpointMetadataCollection metadata, MeasuredOperation measuredOperation)
@@ -136,9 +155,18 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
         else
         {
             var defaultOutcome = HttpOutcomeClassifier.ClassifyStatusCode(statusCode);
-            outcome = _httpOptions.ClassifyOutcomeWithDefault?.Invoke(context, defaultOutcome)
-                ?? _httpOptions.ClassifyOutcome?.Invoke(context)
-                ?? defaultOutcome;
+            try
+            {
+                outcome = _httpOptions.ClassifyOutcomeWithDefault?.Invoke(context, defaultOutcome)
+                    ?? _httpOptions.ClassifyOutcome?.Invoke(context)
+                    ?? defaultOutcome;
+                _ = ServiceLevelIndicator.ToWireValue(outcome);
+            }
+            catch (Exception ex)
+            {
+                outcome = defaultOutcome;
+                LogSafely(() => LogClassifierFailed(ex), measuredOperation.Operation, "HTTP classification", ex);
+            }
         }
 
         measuredOperation.SetOutcome(outcome);
@@ -168,8 +196,11 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
         // (HTTP method count) x (endpoint count) rather than exploding to one series per concrete request path.
         if (string.IsNullOrEmpty(template))
         {
-            LogMissingRouteTemplate(context.GetEndpoint()?.DisplayName ?? "(no endpoint)");
-            return context.Request.Method.ToUpperInvariant() + " <unrouted>";
+            var operation = context.Request.Method.ToUpperInvariant() + " <unrouted>";
+            LogSafely(
+                () => LogMissingRouteTemplate(context.GetEndpoint()?.DisplayName ?? "(no endpoint)"),
+                operation, "route resolution");
+            return operation;
         }
 
         // A route group's root endpoint yields a trailing slash in the raw template (e.g. a "/orders"

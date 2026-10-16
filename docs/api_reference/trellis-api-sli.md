@@ -63,7 +63,9 @@ public sealed class ServiceLevelIndicator : IDisposable
 
 Singleton service that creates and records SLI metrics using an OpenTelemetry `Histogram<long>`. Resolved via DI from `IOptions<ServiceLevelIndicatorOptions>`.
 
-**Disposal and meter ownership.** `ServiceLevelIndicator` owns the `Meter` only when it created it (i.e. when no `Meter` was supplied in `ServiceLevelIndicatorOptions`). On `Dispose()`, an internally-created meter is disposed; a user-supplied meter is never disposed by this class. Because `AddServiceLevelIndicator(...)` registers the type as a singleton, the DI container disposes it at host shutdown — applications do not need to call `Dispose()` manually. `Dispose()` is idempotent. After disposal, recording is a silent no-op per OpenTelemetry convention.
+**Disposal and meter ownership.** `ServiceLevelIndicator` owns the `Meter` only when it created it (i.e. when no `Meter` was supplied in `ServiceLevelIndicatorOptions`). On `Dispose()`, an internally-created meter is disposed; a user-supplied meter is never disposed by this class. Because `AddServiceLevelIndicator(...)` registers the type as a singleton, the DI container disposes it at host shutdown — applications do not need to call `Dispose()` manually. `Dispose()` is idempotent.
+
+Configuration is copied at construction, including the threshold list, without modifying caller options. Reusing configuration without a custom meter creates independently owned meters. Later changes to the original options do not update the instance; its options property exposes its effective configuration and actual meter.
 
 **Constants**
 
@@ -75,13 +77,14 @@ Singleton service that creates and records SLI metrics using an OpenTelemetry `H
 
 | Name | Type | Description |
 |---|---|---|
-| `ServiceLevelIndicatorOptions` | `ServiceLevelIndicatorOptions` | The options instance the indicator was constructed with. |
+| `ServiceLevelIndicatorOptions` | `ServiceLevelIndicatorOptions` | Per-instance options copy, including the effective meter. Not the caller's original configuration object. |
 
 **Constructors**
 
 | Signature | Description |
 |---|---|
 | `public ServiceLevelIndicator(IOptions<ServiceLevelIndicatorOptions> options)` | Validates `LocationId`, `DurationInstrumentName`, and thresholds; snapshots thresholds before creating instruments; uses the supplied meter or creates `"Trellis.SLI"` with the assembly version. Creates the duration histogram, diagnostic counter, and opt-in threshold counter. |
+| `public ServiceLevelIndicator(IOptions<ServiceLevelIndicatorOptions> options, ILogger<ServiceLevelIndicator> logger)` | Same initialization with warning logs for scope recording failures. Rejects a null logger. DI selects this overload when logging is registered; the original constructor requires no logging services. |
 
 **Methods**
 
@@ -185,11 +188,15 @@ Represents an in-flight measurement. The stopwatch starts in the constructor; di
 
 | Signature | Returns | Description |
 |---|---|---|
-| `public void SetOutcome(SliOutcome outcome)` | `void` | Sets the SLI outcome recorded with the measurement. Default is `Ignored`. |
+| `public void SetOutcome(SliOutcome outcome)` | `void` | Sets the SLI outcome recorded with the measurement. Default is `Ignored`. Throws immediately for an undefined outcome without changing the previous outcome. |
 | `public void SetActivityStatusCode(ActivityStatusCode code)` | `void` | Obsolete compatibility shim that maps `Ok` to `Success`, `Error` to `Failure`, and other values to `Ignored`. |
 | `public void AddAttribute(string attribute, object? value)` | `void` | Appends a custom attribute to be emitted with the measurement. Throws if the name collides with a reserved SLI tag. |
-| `public void Dispose()` | `void` | Stops the stopwatch and records the metric. Idempotent. |
+| `public void Dispose()` | `void` | Stops the stopwatch and attempts recording once. Terminal even if recording fails; reports recording errors instead of throwing them or retrying. |
 | `protected virtual void Dispose(bool disposing)` | `void` | Standard dispose pattern hook. |
+
+**Failure boundary.** Direct `Record(...)` calls still surface invalid arguments and provider errors. `AddAttribute(...)` and `SetOutcome(...)` validate immediately. Legacy direct `Attributes` mutations are validated during recording; invalid measurements are dropped and reported. Scope finalization never replaces an action/selector result or exception with a recording error. Providers can fail after partial emission; no retry or rollback is attempted.
+
+**Diagnostics.** Scope recording failures emit warning logs through `ILogger<ServiceLevelIndicator>` when available and EventSource provider `Trellis-ServiceLevelIndicators`, event 1 (`MeasurementRecordingFailed`, fields `operation` and `error`). If diagnostic logging throws, event 2 (`DiagnosticLoggingFailed`, fields `operation`, `stage`, `originalError`, `loggingError`) reports the failure without propagating it. These are diagnostic events, not new SLI metric dimensions.
 
 ---
 

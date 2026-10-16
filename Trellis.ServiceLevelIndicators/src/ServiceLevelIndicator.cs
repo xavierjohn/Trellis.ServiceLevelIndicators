@@ -5,6 +5,8 @@ using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Reflection;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 /// <summary>
@@ -21,6 +23,10 @@ public sealed class ServiceLevelIndicator : IDisposable
 {
     private const string ThresholdAttributeName = "sli.latency.threshold_ms";
     private const string ThresholdResultAttributeName = "sli.latency.result";
+    private static readonly Action<ILogger, string, Exception?> _logRecordingFailed = LoggerMessage.Define<string>(
+        LogLevel.Warning,
+        new EventId(1, "MeasurementRecordingFailed"),
+        "SLI measurement {Operation} could not be recorded.");
 
     /// <summary>
     /// Default meter name used when no <see cref="Meter"/> is provided in options.
@@ -33,7 +39,7 @@ public sealed class ServiceLevelIndicator : IDisposable
     public const string UnknownCustomerResourceId = "Unknown";
 
     /// <summary>
-    /// Gets the options used to configure this instance.
+    /// Gets this instance's options copy, including its effective meter.
     /// </summary>
     public ServiceLevelIndicatorOptions ServiceLevelIndicatorOptions { get; }
 
@@ -43,11 +49,25 @@ public sealed class ServiceLevelIndicator : IDisposable
     private readonly long[] _latencyThresholds;
     private readonly Meter _meter;
     private readonly bool _ownsMeter;
+    private readonly ILogger<ServiceLevelIndicator> _logger;
     private bool _disposed;
 
-    public ServiceLevelIndicator(IOptions<ServiceLevelIndicatorOptions> options)
+    public ServiceLevelIndicator(IOptions<ServiceLevelIndicatorOptions> options) :
+        this(options, NullLogger<ServiceLevelIndicator>.Instance)
+    { }
+
+    /// <summary>
+    /// Creates an instance with diagnostic logging for measurement recording failures.
+    /// </summary>
+    /// <param name="options">Startup configuration, copied for this instance without modifying the caller's options.</param>
+    /// <param name="logger">Logger for recording failures; logging faults are reported through EventSource.</param>
+    public ServiceLevelIndicator(
+        IOptions<ServiceLevelIndicatorOptions> options,
+        ILogger<ServiceLevelIndicator> logger)
     {
-        ServiceLevelIndicatorOptions = options.Value;
+        ArgumentNullException.ThrowIfNull(logger);
+        _logger = logger;
+        ServiceLevelIndicatorOptions = options.Value.Copy();
 
         ArgumentException.ThrowIfNullOrWhiteSpace(ServiceLevelIndicatorOptions.LocationId, nameof(ServiceLevelIndicatorOptions.LocationId));
         ArgumentException.ThrowIfNullOrWhiteSpace(ServiceLevelIndicatorOptions.DurationInstrumentName, nameof(ServiceLevelIndicatorOptions.DurationInstrumentName));
@@ -88,6 +108,20 @@ public sealed class ServiceLevelIndicator : IDisposable
         _disposed = true;
         if (_ownsMeter)
             _meter.Dispose();
+    }
+
+    internal void ReportRecordingFailure(string operation, Exception exception)
+    {
+        ServiceLevelIndicatorEventSource.Log.ReportRecordingFailure(operation, exception);
+        try
+        {
+            _logRecordingFailed(_logger, operation, exception);
+        }
+        catch (Exception loggingException)
+        {
+            ServiceLevelIndicatorEventSource.Log.ReportLoggingFailure(
+                operation, "measurement recording", exception, loggingException);
+        }
     }
 
     /// <summary>
@@ -138,6 +172,7 @@ public sealed class ServiceLevelIndicator : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operation, nameof(operation));
         ValidateRecordAttributeNames(attributes);
+        var wireOutcome = ToWireValue(outcome);
 
         customerResourceId = NormalizeCustomerResourceId(customerResourceId);
         RecordUnknownCustomerResourceId(operation, customerResourceId);
@@ -148,7 +183,7 @@ public sealed class ServiceLevelIndicator : IDisposable
             { "CustomerResourceId", customerResourceId },
             { "LocationId", ServiceLevelIndicatorOptions.LocationId },
             { "Operation", operation },
-            { "Outcome", ToWireValue(outcome) }
+            { "Outcome", wireOutcome }
         };
 
         for (var i = 0; i < attributes.Length; i++)

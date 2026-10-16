@@ -160,6 +160,16 @@ For a fixed meter/resource scope, `N` thresholds and `P` projected base-tag comb
 
 `ServiceLevelIndicator` is a sealed `IDisposable` and is meant to be registered as a singleton — the DI container disposes it (and the `Meter` it created) at host shutdown, so applications never need to call `Dispose()` manually. If you supply your own `Meter` via `ServiceLevelIndicatorOptions.Meter`, you own its lifetime; SLI will not dispose it.
 
+Configuration is copied at construction, including the threshold list. Caller options are not modified, so reusing a configuration without a custom meter creates independently owned meters. `sli.ServiceLevelIndicatorOptions` exposes the instance's effective options and meter. Later changes to the original configuration do not update an existing instance.
+
+### Recording failure policy
+
+`Record(...)`, `AddAttribute(...)`, and `SetOutcome(...)` reject invalid inputs directly; undefined outcomes are rejected before recording side effects. Action and result-selector exceptions still propagate with their established failure/cancellation semantics.
+
+`MeasuredOperation.Dispose()` attempts recording once, becomes terminal before emission, and does not throw recording failures over the application's result or exception. Invalid legacy `Attributes` list mutations drop the measurement and report a diagnostic. A metric-provider failure can leave partially emitted data; disposal never retries or fabricates a successful measurement.
+
+Recording failures produce a warning through `ILogger<ServiceLevelIndicator>` when available and EventSource provider `Trellis-ServiceLevelIndicators` (event 1, `MeasurementRecordingFailed`). The existing constructor still works without logging services; an overload accepts `ILogger<ServiceLevelIndicator>`, and DI selects it when logging is registered. A throwing logger is isolated and reported through the same EventSource (event 2, `DiagnosticLoggingFailed`).
+
 ## Key APIs
 
 | Type / Method | Description |

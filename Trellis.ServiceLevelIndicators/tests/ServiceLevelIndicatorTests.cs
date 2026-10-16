@@ -28,7 +28,7 @@ public class ServiceLevelIndicatorTests : IDisposable
         {
             InstrumentPublished = (instrument, listener) =>
             {
-                if (instrument.Meter.Name is MeterName)
+                if (ReferenceEquals(instrument.Meter, _meter))
                     listener.EnableMeasurementEvents(instrument);
             }
         };
@@ -720,11 +720,12 @@ public class ServiceLevelIndicatorTests : IDisposable
     }
 
     [Fact]
-    public void MeasuredOperation_Dispose_rejects_duplicate_attribute_names_added_by_direct_list_mutation()
+    public void MeasuredOperation_Dispose_reports_duplicate_attribute_names_added_by_direct_list_mutation()
     {
         // Arrange
         var serviceLevelIndicator = CreateServiceLevelIndicator();
         var measuredOperation = serviceLevelIndicator.StartMeasuring("TestOperation");
+        using var diagnostics = new InstrumentationDiagnosticsCapture("TestOperation");
         measuredOperation.Attributes.Add(new KeyValuePair<string, object?>("CustomAttribute", "first"));
         measuredOperation.Attributes.Add(new KeyValuePair<string, object?>("CustomAttribute", "second"));
 
@@ -732,24 +733,27 @@ public class ServiceLevelIndicatorTests : IDisposable
         Action act = measuredOperation.Dispose;
 
         // Assert
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*added more than once*");
+        act.Should().NotThrow();
+        diagnostics.Failures.Should().ContainSingle()
+            .Which.Data["error"].Should().BeOfType<string>().Which.Should().Contain("added more than once");
     }
 
     [Fact]
-    public void MeasuredOperation_Dispose_rejects_blank_attribute_names_added_by_direct_list_mutation()
+    public void MeasuredOperation_Dispose_reports_blank_attribute_names_added_by_direct_list_mutation()
     {
         // Arrange
         var serviceLevelIndicator = CreateServiceLevelIndicator();
         var measuredOperation = serviceLevelIndicator.StartMeasuring("TestOperation");
+        using var diagnostics = new InstrumentationDiagnosticsCapture("TestOperation");
         measuredOperation.Attributes.Add(new KeyValuePair<string, object?>(" ", "invalid"));
 
         // Act
         Action act = measuredOperation.Dispose;
 
         // Assert
-        act.Should().Throw<ArgumentException>()
-            .WithMessage("*attribute names cannot be null, empty, or whitespace*");
+        act.Should().NotThrow();
+        diagnostics.Failures.Should().ContainSingle()
+            .Which.Data["error"].Should().BeOfType<string>().Which.Should().Contain("attribute names cannot be null, empty, or whitespace");
     }
 
     private ServiceLevelIndicator CreateServiceLevelIndicator() =>

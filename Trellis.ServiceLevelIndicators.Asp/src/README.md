@@ -186,6 +186,10 @@ builder.Services.AddServiceLevelIndicator(options => options.LocationId = locati
 
 The existing one-argument callback remains a replacement classifier. Last fluent registration wins across both overloads. For direct options configuration, `ServiceLevelIndicatorHttpOptions.ClassifyOutcomeWithDefault` takes precedence over `ClassifyOutcome` when both are set. Neither callback overrides request aborts or escaping exceptions.
 
+If a callback throws or returns an undefined outcome, the middleware logs a warning, uses the already-computed built-in status outcome, and continues enrichment. It does not try a lower-priority callback or turn the handler's completion into a classifier exception. This ambient HTTP policy differs from explicit core result selectors, whose errors still propagate.
+
+Enrichment and diagnostic-logger failures do not replace handler exceptions or change responses. A broken logger is reported through EventSource provider `Trellis-ServiceLevelIndicators`, event 2 (`DiagnosticLoggingFailed`). Recording failures are reported by the core and are not thrown from measurement disposal; failed recording is not retried.
+
 ### Enrich with custom data
 
 Use `Enrich` (or `EnrichAsync`) to set `CustomerResourceId` from a stable identifier on the request (a tenant/subscription claim, a header, etc.) or to add custom attributes. **Do not use the caller's identity (UPN, user ID) as `CustomerResourceId`** — that's the caller, not the resource being acted on. See [What `CustomerResourceId` is — and what it is NOT](#what-customerresourceid-is--and-what-it-is-not).
