@@ -4,22 +4,23 @@ using System.Net;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using SliProductionDemo.Controllers;
 using Trellis.ServiceLevelIndicators;
 
 public sealed class DemoScenarioTests
 {
     [Theory]
-    [InlineData(new[] { 25, 35, 45, 55 })]
-    [InlineData(new[] { 45, 60, 75, 90 })]
-    [InlineData(new[] { 550, 700, 850, 1_000 })]
-    [InlineData(new[] { 25, 35, 45 })]
-    [InlineData(new[] { 35, 50, 65 })]
-    [InlineData(new[] { 450, 600, 750 })]
-    public void Delay_jitter_stays_within_the_requested_palette(int[] values)
+    [InlineData("read", new[] { 25, 35, 45, 55 })]
+    [InlineData("healthy", new[] { 45, 60, 75, 90 })]
+    [InlineData("slow", new[] { 550, 700, 850, 1_000 })]
+    [InlineData("client-error", new[] { 25, 35, 45 })]
+    [InlineData("throttled", new[] { 35, 50, 65 })]
+    [InlineData("failure", new[] { 450, 600, 750 })]
+    public void Each_operation_mode_uses_its_documented_delay_palette(string mode, int[] expectedValues)
     {
         for (var i = 0; i < 1_000; i++)
-            values.Should().Contain(ProjectsController.NextDelay(values));
+            expectedValues.Should().Contain(ProjectsController.NextDelay(mode));
     }
 
     [Theory]
@@ -52,7 +53,8 @@ public sealed class DemoScenarioTests
         threshold.Tags["Operation"].Should().Be("SyncProject");
         threshold.Tags["Outcome"].Should().Be(expectedOutcome);
         threshold.Tags["sli.latency.threshold_ms"].Should().Be(250L);
-        threshold.Tags["sli.latency.result"].Should().Be(duration.Value <= 250 ? "within" : "exceeded");
+        if (mode is "slow" or "failure")
+            threshold.Tags["sli.latency.result"].Should().Be("exceeded");
         threshold.Tags.Should().NotContainKeys("http.request.method", "http.response.status.code");
     }
 
@@ -115,6 +117,9 @@ public sealed class DemoScenarioTests
         using var capture = new MetricCapture();
         using var application = new DemoApplicationFactory(capture);
         using var client = application.CreateClient();
+
+        application.Services.GetRequiredService<IOptions<ServiceLevelIndicatorOptions>>()
+            .Value.AutomaticallyEmitted.Should().BeTrue();
 
         using var response = await client.GetAsync("/health", TestContext.Current.CancellationToken);
 

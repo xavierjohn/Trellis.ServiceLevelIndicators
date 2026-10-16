@@ -7,14 +7,19 @@ COPY Trellis.ServiceLevelIndicators/src/Trellis.ServiceLevelIndicators.csproj Tr
 COPY Trellis.ServiceLevelIndicators.Asp/src/Trellis.ServiceLevelIndicators.Asp.csproj Trellis.ServiceLevelIndicators.Asp/src/
 COPY sample/SliProductionDemo/SliProductionDemo.csproj sample/SliProductionDemo/
 RUN dotnet restore sample/SliProductionDemo/SliProductionDemo.csproj
-COPY . .
+COPY .editorconfig icon.png ./
+COPY docs/api_reference/trellis-api-sli.md docs/api_reference/trellis-api-sli-asp.md docs/api_reference/
+COPY Trellis.ServiceLevelIndicators/src/ Trellis.ServiceLevelIndicators/src/
+COPY Trellis.ServiceLevelIndicators.Asp/src/ Trellis.ServiceLevelIndicators.Asp/src/
+COPY sample/SliProductionDemo/ sample/SliProductionDemo/
 RUN dotnet publish sample/SliProductionDemo/SliProductionDemo.csproj \
     --configuration Release --no-restore --output /out/api -p:UseAppHost=false
 
 FROM source AS publish-traffic
 COPY sample/GenerateSli/GenerateSli.csproj sample/GenerateSli/
 RUN dotnet restore sample/GenerateSli/GenerateSli.csproj
-COPY . .
+COPY .editorconfig icon.png ./
+COPY sample/GenerateSli/ sample/GenerateSli/
 RUN dotnet publish sample/GenerateSli/GenerateSli.csproj \
     --configuration Release --no-restore --output /out/traffic -p:UseAppHost=false
 

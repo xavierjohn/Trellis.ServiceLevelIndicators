@@ -50,8 +50,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
-app.MapGet("/health", () => Results.Ok())
-    .ExcludeFromServiceLevelIndicator();
+app.MapGet("/health", () => Results.Ok());
 app.Run();
 
 /// <summary>

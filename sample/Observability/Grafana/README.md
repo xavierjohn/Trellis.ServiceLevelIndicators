@@ -12,7 +12,7 @@ There is no external application or downstream service to configure. The operati
 
 ## Start everything with one command
 
-You need Docker with Linux containers and Docker Compose v2. No local .NET SDK is required. The first build downloads the .NET images and restores the sample's NuGet dependencies; subsequent starts use cached images.
+You need Docker with Linux containers and Docker Compose v2. No local .NET SDK is required. The first build downloads the .NET images and restores the sample's NuGet dependencies; subsequent starts use cached images. Restores are cached separately, and each image copies only its own project graph so unrelated source edits do not rebuild both images.
 
 From `sample\Observability\Grafana`:
 
@@ -35,6 +35,8 @@ The command starts five services:
 | `otel-collector` | Receives the API's OTLP metrics |
 | `prometheus` | Scrapes and stores the exported metrics |
 | `grafana` | Provisioned dashboard at http://localhost:3000 |
+
+Compose starts `demo-traffic` only after the API's HTTP `/health` probe succeeds. The probe uses the existing .NET runtime, not an extra curl dependency.
 
 The Docker `demo` profile is optional: plain `docker compose up -d` still starts only the observability stack for use with other samples. All published ports are bound to loopback. Grafana permits anonymous admin access for this local demo; do not expose this configuration as a production deployment.
 
@@ -65,6 +67,8 @@ Each phase lasts approximately 30 seconds. The five-phase cycle takes roughly tw
 | Recovery | Fast 200 responses across all three projects | Both SLIs recover before the next cycle. |
 
 Reads continue throughout. Every phase also retains healthy sync requests for every project. Operating modes and affected projects are repeatable; the API independently selects each request's delay from that mode's fixed palette. The generator schedules against elapsed time for a target rate of 12 requests/second, not an exact throughput guarantee or a load benchmark.
+
+At most 32 requests can be in flight. If the API hangs or a higher configured rate reaches that limit, the generator logs backpressure and slows down until requests complete. Completed tasks are retired, and missed send slots are skipped rather than queued for a catch-up burst.
 
 To see the current phase and HTTP response counts:
 
@@ -134,7 +138,8 @@ The running services restart after an unexpected exit. Stopping them with Compos
 ## Troubleshooting
 
 - **A port is already in use:** stop an earlier copy of the stack or a locally running sample API. The demo uses localhost ports 3000, 4317, 4318, 5199, 9090, and 9464.
-- **No metrics after startup:** check `docker compose --profile demo ps` and `docker compose --profile demo logs demo-api demo-traffic otel-collector`. The generator waits up to 30 seconds for `/health`. If readiness still fails, it exits nonzero and Compose restarts it.
+- **No metrics after startup:** check `docker compose --profile demo ps` and `docker compose --profile demo logs demo-api demo-traffic otel-collector`. Compose waits for `demo-api` to become healthy before starting traffic. The generator also keeps a bounded 30-second readiness check for local runs and startup races after an API restart.
+- **The API stays unhealthy:** inspect `docker compose --profile demo logs demo-api` and its healthcheck output with `docker inspect`. A slow initial start keeps traffic waiting instead of restarting the generator every 30 seconds.
 - **The API restarts during a run:** continuous traffic logs and counts transport failures and timeouts without exiting. Successful requests resume when the API is reachable again; no generator restart is needed.
 - **No data after changing filters:** select `SyncProject` and one of the three known projects, or reset customer/location/outcome filters to **All**. Check that `demo-traffic` is running and keep a recent time range.
 - **The first build fails to download dependencies:** confirm Docker can reach Microsoft's container registry and NuGet.org.
@@ -163,6 +168,8 @@ dotnet run --project ..\..\GenerateSli\GenerateSli.csproj -- `
   --wait-for-ready
 ```
 
-Omit `--continuous` for a single five-phase run; request transport failures and timeouts still exit nonzero in this mode. Invalid options print a concise error and usage with exit code 2. Ctrl+C stops either local process gracefully. Stop both before running `docker compose down`.
+Omit `--continuous` for a single five-phase run. Its first request transport failure or timeout stops further sends, cancels/drains outstanding requests, and exits with code 1. Requested shutdown takes precedence over request errors while draining. Invalid options print a concise error and usage with exit code 2.
+
+Ctrl+C stops either local process gracefully. The generator also handles SIGTERM on Linux and macOS. Windows SIGTERM cannot be canceled by .NET; use Ctrl+C for graceful native Windows shutdown. Stop both processes before running `docker compose down`.
 
 The [focused Minimal API and API-versioned examples](../../../docs/usage-reference.md#running-the-focused-examples) can reuse this stack and already configure the 250 ms threshold. Their `Api.http` files contain example requests; this traffic generator targets only the continuous demo's Project Tracker API. The dashboard aggregates matching SLI dimensions across services, so stop the focused examples when exploring the continuous demo in isolation.

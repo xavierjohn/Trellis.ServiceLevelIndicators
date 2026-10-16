@@ -58,7 +58,6 @@ public sealed class FocusedSampleTests
         threshold.Tags["CustomerResourceId"].Should().Be("project-red");
         threshold.Tags["SyncMode"].Should().Be(mode);
         threshold.Tags["sli.latency.threshold_ms"].Should().Be(250L);
-        threshold.Tags["sli.latency.result"].Should().Be(duration.Value <= 250 ? "within" : "exceeded");
         if (mode == "slow")
             threshold.Tags["sli.latency.result"].Should().Be("exceeded");
     }

@@ -14,9 +14,9 @@
     <LangVersion>Latest</LangVersion>
     <AnalysisLevel>latest-Recommended</AnalysisLevel>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/xavierjohn/ServiceLevelIndicators.git</RepositoryUrl>
+    <RepositoryUrl>https://github.com/xavierjohn/Trellis.ServiceLevelIndicators.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageProjectUrl>https://github.com/xavierjohn/ServiceLevelIndicators</PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/xavierjohn/Trellis.ServiceLevelIndicators</PackageProjectUrl>
     <PackageIcon>icon.png</PackageIcon>
   </PropertyGroup>
 

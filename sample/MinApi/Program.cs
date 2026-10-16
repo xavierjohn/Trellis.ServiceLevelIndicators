@@ -45,8 +45,7 @@ projects.MapPost("/sync/{mode:regex(^(quick|standard|slow)$)}",
     })
     .AddServiceLevelIndicator("SyncProject");
 
-app.MapGet("/health", () => Results.Ok())
-    .ExcludeFromServiceLevelIndicator();
+app.MapGet("/health", () => Results.Ok());
 
 app.MapOpenApi();
 app.MapScalarApiReference();

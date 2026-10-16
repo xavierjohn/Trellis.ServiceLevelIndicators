@@ -1,5 +1,6 @@
 ﻿namespace GenerateSli.Tests;
 
+using System.Collections.Concurrent;
 using System.Net;
 using Microsoft.Extensions.Time.Testing;
 
@@ -177,13 +178,15 @@ public sealed class ScenarioTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Finite_mode_still_propagates_transport_failures_and_timeouts(bool timeout)
+    public async Task Finite_mode_stops_sending_immediately_after_a_transport_failure_or_timeout(bool timeout)
     {
+        var requests = 0;
         using var client = CreateClient(request =>
         {
             if (request.RequestUri!.AbsolutePath == "/health")
                 return new(HttpStatusCode.OK);
 
+            requests++;
             if (timeout)
                 throw new TaskCanceledException("Simulated request timeout.");
 
@@ -195,13 +198,200 @@ public sealed class ScenarioTests
 
         var act = () => AdvanceUntilCompleteAsync(
             ScenarioRunner.RunAsync(
-                client, new(client.BaseAddress!, 1, 2), output, error, TestContext.Current.CancellationToken, time),
+                client, new(client.BaseAddress!, 30, 1), output, error, TestContext.Current.CancellationToken, time),
             time);
 
         await act.Should().ThrowAsync<Exception>()
             .Where(ex => timeout ? ex is OperationCanceledException : ex is HttpRequestException);
+        requests.Should().Be(1, "a failed finite run must not keep sending for the rest of its phase");
         output.ToString().Should().NotContain("Scenario complete.");
         error.ToString().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task User_cancellation_takes_precedence_over_an_earlier_failure_while_draining()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var first = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = 0;
+        using var client = new PayloadObservingClient(new ResponseHandler((request, _) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/health")
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+
+            return Interlocked.Increment(ref requests) == 1 ? first.Task : second.Task;
+        }))
+        { BaseAddress = new Uri("http://demo.test/") };
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var time = new FakeTimeProvider();
+        var run = ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 30, 10), output, error, cancellation.Token, time);
+
+        try
+        {
+            await AdvanceUntilAsync(() => Volatile.Read(ref requests) >= 2, time);
+            first.SetException(new HttpRequestException("An earlier request failed."));
+            await AdvanceUntilAsync(() => client.FirstPayload?.IsFaulted == true, time, TimeSpan.Zero);
+            cancellation.Cancel();
+            second.SetCanceled(cancellation.Token);
+
+            var act = () => AdvanceUntilCompleteAsync(run, time);
+            await act.Should().ThrowAsync<OperationCanceledException>();
+            output.ToString().Should().NotContain("Scenario complete.");
+        }
+        finally
+        {
+            cancellation.Cancel();
+            first.TrySetCanceled(cancellation.Token);
+            second.TrySetCanceled(cancellation.Token);
+        }
+    }
+
+    [Fact]
+    public async Task A_failure_after_the_phase_window_cancels_other_in_flight_requests()
+    {
+        var first = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = 0;
+        using var client = CreateClient(async (request, token) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/health")
+                return new(HttpStatusCode.OK);
+
+            if (Interlocked.Increment(ref requests) == 1)
+                return await first.Task;
+
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return new(HttpStatusCode.OK);
+            }
+            finally
+            {
+                drained.TrySetResult();
+            }
+        });
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var time = new FakeTimeProvider();
+        var run = ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 1, 2), output, error, TestContext.Current.CancellationToken, time);
+
+        await AdvanceUntilAsync(() => Volatile.Read(ref requests) >= 2, time);
+        time.Advance(TimeSpan.FromSeconds(1));
+        first.SetException(new HttpRequestException("A request failed while draining."));
+
+        var act = () => run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await act.Should().ThrowAsync<HttpRequestException>().WithMessage("*while draining*");
+        requests.Should().Be(2);
+        drained.Task.IsCompletedSuccessfully.Should().BeTrue();
+        output.ToString().Should().NotContain("Scenario complete.");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Hanging_requests_apply_backpressure_at_the_documented_in_flight_limit(bool continuous)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var requests = 0;
+        var active = 0;
+        var maximum = 0;
+        using var client = CreateClient(async (request, token) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/health")
+                return new(HttpStatusCode.OK);
+
+            Interlocked.Increment(ref requests);
+            maximum = Math.Max(maximum, Interlocked.Increment(ref active));
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return new(HttpStatusCode.OK);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref active);
+            }
+        });
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var time = new FakeTimeProvider();
+        var run = ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 30, 1_000, Continuous: continuous),
+            output, error, cancellation.Token, time);
+
+        try
+        {
+            await AdvanceUntilAsync(() => Volatile.Read(ref requests) >= 32, time);
+            time.Advance(TimeSpan.FromSeconds(5));
+            await Task.Yield();
+
+            requests.Should().Be(32);
+            maximum.Should().Be(32);
+            active.Should().Be(32);
+            error.ToString().Should().Contain("In-flight limit (32) reached");
+        }
+        finally
+        {
+            cancellation.Cancel();
+            var stop = () => run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await stop.Should().ThrowAsync<OperationCanceledException>();
+        }
+
+        active.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Resuming_after_backpressure_does_not_burst_to_catch_up_missed_requests()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var requests = new ConcurrentQueue<TaskCompletionSource<HttpResponseMessage>>();
+        using var client = CreateClient((request, token) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/health")
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+
+            var completion = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+            requests.Enqueue(completion);
+            return completion.Task.WaitAsync(token);
+        });
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var time = new FakeTimeProvider();
+        var run = ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 30, 100, Continuous: true),
+            output, error, cancellation.Token, time);
+
+        try
+        {
+            await AdvanceUntilAsync(() => requests.Count >= 32, time);
+            time.Advance(TimeSpan.FromSeconds(5));
+            requests.Count.Should().Be(32);
+
+            foreach (var completion in requests.ToArray())
+                completion.SetResult(new(HttpStatusCode.OK));
+
+            await AdvanceUntilAsync(() => requests.Count > 32, time, TimeSpan.Zero);
+            await Task.Yield();
+            requests.Count.Should().Be(33);
+
+            time.Advance(TimeSpan.FromMilliseconds(9));
+            await Task.Yield();
+            requests.Count.Should().Be(33);
+
+            time.Advance(TimeSpan.FromMilliseconds(1));
+            await AdvanceUntilAsync(() => requests.Count > 33, time, TimeSpan.Zero);
+            requests.Count.Should().Be(34);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            var stop = () => run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await stop.Should().ThrowAsync<OperationCanceledException>();
+        }
     }
 
     [Fact]
@@ -345,25 +535,52 @@ public sealed class ScenarioTests
 
     private static async Task AdvanceUntilCompleteAsync(Task run, FakeTimeProvider time)
     {
-        for (var i = 0; i < 6_000 && !run.IsCompleted; i++)
-        {
-            time.Advance(TimeSpan.FromMilliseconds(10));
-            await Task.Yield();
-        }
-
-        run.IsCompleted.Should().BeTrue("the scenario should finish within one virtual minute");
+        await AdvanceUntilAsync(() => run.IsCompleted, time);
         await run;
     }
 
+    private static async Task AdvanceUntilAsync(Func<bool> completed, FakeTimeProvider time, TimeSpan? step = null)
+    {
+        for (var i = 0; i < 6_000 && !completed(); i++)
+        {
+            time.Advance(step ?? TimeSpan.FromMilliseconds(10));
+            // Let timer continuations run before advancing virtual time again.
+            await Task.Factory.StartNew(
+                static () => { },
+                TestContext.Current.CancellationToken,
+                TaskCreationOptions.PreferFairness,
+                TaskScheduler.Default);
+        }
+
+        completed().Should().BeTrue("the scenario should make progress within bounded virtual-time steps");
+    }
+
     private static HttpClient CreateClient(Func<HttpRequestMessage, HttpResponseMessage> respond) =>
+        CreateClient((request, _) => Task.FromResult(respond(request)));
+
+    private static HttpClient CreateClient(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond) =>
         new(new ResponseHandler(respond)) { BaseAddress = new Uri("http://demo.test/") };
 
-    private sealed class ResponseHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    private sealed class ResponseHandler(
+        Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(respond(request));
+            return respond(request, cancellationToken);
+        }
+    }
+
+    private sealed class PayloadObservingClient(HttpMessageHandler handler) : HttpClient(handler)
+    {
+        public Task<HttpResponseMessage>? FirstPayload { get; private set; }
+
+        public override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var send = base.SendAsync(request, cancellationToken);
+            if (request.RequestUri!.AbsolutePath != "/health")
+                FirstPayload ??= send;
+            return send;
         }
     }
 

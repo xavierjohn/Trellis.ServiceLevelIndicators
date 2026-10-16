@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Globalization;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 
 GeneratorOptions options;
@@ -23,7 +24,7 @@ ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
     cancellation.Cancel();
 };
 Console.CancelKeyPress += cancelHandler;
-using var termination = OperatingSystem.IsLinux()
+using var termination = OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsWindows()
     ? PosixSignalRegistration.Create(PosixSignal.SIGTERM, context =>
     {
         context.Cancel = true;
@@ -50,6 +51,11 @@ catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
     Console.WriteLine("Scenario stopped.");
     return 0;
 }
+catch (HttpRequestException) when (cancellation.IsCancellationRequested)
+{
+    Console.WriteLine("Scenario stopped.");
+    return 0;
+}
 catch (HttpRequestException ex)
 {
     Console.Error.WriteLine(
@@ -72,6 +78,8 @@ return 0;
 
 internal static class ScenarioRunner
 {
+    private const int MaximumInFlightRequests = 32;
+
     private static readonly Phase[] Phases =
     [
         new("Healthy baseline", ScenarioPhase.Healthy),
@@ -166,38 +174,116 @@ internal static class ScenarioRunner
         TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
+        using var phaseCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var requestCounts = new ConcurrentDictionary<string, int>(StringComparer.Ordinal);
-        var pending = new List<Task>();
+        var pending = new List<Task>(MaximumInFlightRequests);
         var duration = TimeSpan.FromSeconds(options.PhaseSeconds);
+        var interval = TimeSpan.FromSeconds(1d / options.RequestsPerSecond);
         var started = timeProvider.GetTimestamp();
-        long scheduled = 0;
+        var nextRequest = TimeSpan.Zero;
+        var reportedBackpressure = false;
+        ExceptionDispatchInfo? failure = null;
 
         output.WriteLine();
         output.WriteLine($"[{timeProvider.GetLocalNow():HH:mm:ss}] {phase.Name}");
 
         try
         {
-            while (timeProvider.GetElapsedTime(started) < duration)
+            while (timeProvider.GetElapsedTime(started) < duration || pending.Count > 0)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                pending.Add(SendRequestAsync(
-                    client, phase.Kind, nextSequence(), options.Continuous, requestCounts, error, cancellationToken));
+                phaseCancellation.Token.ThrowIfCancellationRequested();
+                for (var i = pending.Count - 1; i >= 0; i--)
+                {
+                    if (!pending[i].IsCompleted)
+                        continue;
 
-                var nextRequest = TimeSpan.FromSeconds(++scheduled / (double)options.RequestsPerSecond);
-                var delay = nextRequest - timeProvider.GetElapsedTime(started);
-                if (delay > TimeSpan.Zero)
-                    await Task.Delay(delay, timeProvider, cancellationToken);
+                    var completed = pending[i];
+                    pending.RemoveAt(i);
+                    await completed;
+                }
+
+                var elapsed = timeProvider.GetElapsedTime(started);
+                if (elapsed >= duration || pending.Count == MaximumInFlightRequests)
+                {
+                    if (elapsed < duration && !reportedBackpressure)
+                    {
+                        error.WriteLine(
+                            $"In-flight limit ({MaximumInFlightRequests}) reached; slowing traffic until requests complete.");
+                        reportedBackpressure = true;
+                    }
+
+                    if (pending.Count > 0)
+                        await Task.WhenAny(pending).WaitAsync(phaseCancellation.Token);
+                    continue;
+                }
+
+                if (elapsed < nextRequest)
+                {
+                    var remaining = duration - elapsed;
+                    var delay = nextRequest - elapsed;
+                    await WaitForCompletionOrDelayAsync(
+                        pending, delay < remaining ? delay : remaining, timeProvider, phaseCancellation.Token);
+                    continue;
+                }
+
+                pending.Add(SendRequestAsync(
+                    client, phase.Kind, nextSequence(), options.Continuous, requestCounts, error, phaseCancellation.Token));
+
+                nextRequest += interval;
+                if (nextRequest < elapsed)
+                    nextRequest = elapsed + interval;
             }
+        }
+        catch (HttpRequestException ex)
+        {
+            failure = ExceptionDispatchInfo.Capture(ex);
+        }
+        catch (OperationCanceledException ex)
+        {
+            failure = ExceptionDispatchInfo.Capture(ex);
         }
         finally
         {
-            await Task.WhenAll(pending);
+            await phaseCancellation.CancelAsync();
+            try
+            {
+                await Task.WhenAll(pending);
+            }
+            catch (HttpRequestException ex)
+            {
+                failure ??= ExceptionDispatchInfo.Capture(ex);
+            }
+            catch (OperationCanceledException ex)
+            {
+                failure ??= ExceptionDispatchInfo.Capture(ex);
+            }
         }
+
+        // Shutdown wins over request failures discovered while draining.
+        cancellationToken.ThrowIfCancellationRequested();
+        failure?.Throw();
 
         var summary = string.Join(
             ", ",
             requestCounts.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => $"{pair.Key}={pair.Value}"));
         output.WriteLine($"[{timeProvider.GetLocalNow():HH:mm:ss}] {phase.Name} complete: {summary}");
+    }
+
+    private static async Task WaitForCompletionOrDelayAsync(
+        List<Task> pending, TimeSpan delay, TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
+        using var wait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var deadline = Task.Delay(delay, timeProvider, wait.Token);
+        try
+        {
+            var completed = await Task.WhenAny(pending.Append(deadline));
+            if (completed == deadline)
+                await deadline;
+        }
+        finally
+        {
+            await wait.CancelAsync();
+        }
     }
 
     private static async Task SendRequestAsync(

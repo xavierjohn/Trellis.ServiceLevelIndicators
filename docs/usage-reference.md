@@ -298,7 +298,7 @@ app.MapPost("/projects/{projectId}/sync/{mode:regex(^(quick|standard|slow)$)}",
     .AddServiceLevelIndicator("SyncProject");
 ```
 
-The named target must be a stable, validated resource identifier. The route constraint bounds `SyncMode` to three values. See the [runnable Minimal API example](../sample/MinApi/Program.cs) for endpoint opt-in, bounded project IDs, and health exclusion.
+The named target must be a stable, validated resource identifier. The route constraint bounds `SyncMode` to three values. See the [runnable Minimal API example](../sample/MinApi/Program.cs) for endpoint opt-in and bounded project IDs. Its unmarked health and documentation endpoints remain unmeasured because automatic emission is disabled.
 
 Register `AddServiceLevelIndicator()` once per endpoint, either on its group or on the handler. Applying it to both can duplicate parameter metadata and fail endpoint initialization.
 
@@ -325,6 +325,8 @@ public IActionResult Diagnostics() => Ok();
 ```
 
 The attribute also works on controller classes, including inherited controllers/actions. Route-group exclusions apply to nested groups and child endpoints. Exclusion takes precedence over automatic emission and explicit SLI inclusion, regardless of registration order.
+
+With opt-in emission, unmarked endpoints are already unmeasured and need no exclusion annotation. The [always-on demo](../sample/SliProductionDemo/Program.cs) enables automatic emission and explicitly excludes `/health`.
 
 The exclusion check occurs before starting a scope, attaching the SLI feature, classification, and enrichment. No automatic SLI histogram, threshold, or measurement-related diagnostic counts are emitted, even if the handler fails or aborts. A classifier returning `Ignored` only changes a normal completion's outcome and is not equivalent to exclusion.
 
@@ -528,7 +530,7 @@ Both export to `http://localhost:4317` by default and use HTTP-only loopback lau
 
 Each web sample's `Api.http` file contains ready-to-send requests. Scalar is available at http://localhost:5201/scalar/v1 and http://localhost:5202/scalar/v2 in Development.
 
-All measured project IDs are bounded to `project-blue`, `project-green`, and `project-red`; the Minimal API also constrains sync modes. These examples deliberately opt in only their project endpoints and exclude `/health`; docs endpoints and route misses do not enter their SLO populations. The versioned sample is deterministic, not a second random-incident generator. Use the continuous demo for incidents and recovery.
+All measured project IDs are bounded to `project-blue`, `project-green`, and `project-red`; the Minimal API also constrains sync modes. These examples disable automatic emission and opt in only their project endpoints. Unmarked health/docs endpoints and route misses therefore stay outside their SLO populations without exclusion annotations. The versioned sample is deterministic, not a second random-incident generator. Use the continuous demo for incidents and recovery.
 
 The dashboard can display these metrics too, but it aggregates services with matching SLI dimensions. If you want the continuous demo's charts in isolation, stop the focused web examples with Ctrl+C. Their service names remain distinct for custom Prometheus queries. The console example exports only to the console.
 

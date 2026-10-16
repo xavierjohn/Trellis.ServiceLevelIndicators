@@ -159,7 +159,7 @@ Start with the always-on demo for the full experience. These smaller examples is
 |---|---|
 | [Always-on Project Tracker](sample/Observability/Grafana/README.md) | MVC instrumentation, continuous incidents, exact latency counts, and customer-specific Grafana SLIs |
 | [Console](sample/ConsoleApp/Program.cs) | Core-only measurement, custom meter ownership/registration, and console export |
-| [Minimal API](sample/MinApi/Program.cs) | Endpoint opt-in, named operations, target-resource metadata, bounded dimensions, and health exclusion |
+| [Minimal API](sample/MinApi/Program.cs) | Endpoint opt-in, named operations, target-resource metadata, and bounded dimensions; health and docs remain unmeasured |
 | [API-versioned MVC](sample/WebApiVersioned/Program.cs) | The same project operation separated by `http.api.version` |
 
 **[Run the focused examples](docs/usage-reference.md#running-the-focused-examples)** for commands, URLs, and expected metrics. The web examples share the demo's Collector/Prometheus/Grafana stack; their `Api.http` files contain ready-to-send requests.

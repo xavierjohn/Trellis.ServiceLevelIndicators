@@ -56,6 +56,12 @@ services:
       OTEL_METRIC_EXPORT_INTERVAL: "1000"
     ports:
       - "127.0.0.1:5199:8080"
+    healthcheck:
+      test: ["CMD", "dotnet", "SliProductionDemo.dll", "--health-check"]
+      interval: 5s
+      timeout: 5s
+      start_period: 30s
+      retries: 12
     depends_on:
       - otel-collector
 
@@ -72,7 +78,8 @@ services:
       - "--continuous"
       - "--wait-for-ready"
     depends_on:
-      - demo-api
+      demo-api:
+        condition: service_healthy
 
 volumes:
   prometheus-data:

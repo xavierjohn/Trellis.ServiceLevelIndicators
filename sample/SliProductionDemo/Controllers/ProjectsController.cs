@@ -26,7 +26,7 @@ public sealed class ProjectsController : ControllerBase
         if (!KnownProjects.Contains(projectId, StringComparer.Ordinal))
             return ProjectNotFound(projectId);
 
-        await Task.Delay(NextDelay(25, 35, 45, 55), cancellationToken);
+        await Task.Delay(NextDelay("read"), cancellationToken);
         return Ok(new { projectId, status = "Active" });
     }
 
@@ -46,25 +46,25 @@ public sealed class ProjectsController : ControllerBase
         switch (mode)
         {
             case "healthy":
-                await Task.Delay(NextDelay(45, 60, 75, 90), cancellationToken);
+                await Task.Delay(NextDelay(mode), cancellationToken);
                 return Ok(new { projectId, mode, synchronized = true });
 
             case "slow":
-                await Task.Delay(NextDelay(550, 700, 850, 1_000), cancellationToken);
+                await Task.Delay(NextDelay(mode), cancellationToken);
                 return Ok(new { projectId, mode, synchronized = true });
 
             case "client-error":
-                await Task.Delay(NextDelay(25, 35, 45), cancellationToken);
+                await Task.Delay(NextDelay(mode), cancellationToken);
                 return BadRequest(new { projectId, mode, error = "The requested sync range is invalid." });
 
             case "throttled":
-                await Task.Delay(NextDelay(35, 50, 65), cancellationToken);
+                await Task.Delay(NextDelay(mode), cancellationToken);
                 return StatusCode(
                     StatusCodes.Status429TooManyRequests,
                     new { projectId, mode, error = "Sync capacity is temporarily exhausted." });
 
             case "failure":
-                await Task.Delay(NextDelay(450, 600, 750), cancellationToken);
+                await Task.Delay(NextDelay(mode), cancellationToken);
                 return StatusCode(
                     StatusCodes.Status503ServiceUnavailable,
                     new { projectId, mode, error = "The downstream sync service is unavailable." });
@@ -82,5 +82,18 @@ public sealed class ProjectsController : ControllerBase
         return NotFound(new { projectId, error = "Project not found." });
     }
 
-    internal static int NextDelay(params int[] values) => values[Random.Shared.Next(values.Length)];
+    internal static int NextDelay(string mode)
+    {
+        ReadOnlySpan<int> values = mode switch
+        {
+            "read" => [25, 35, 45, 55],
+            "healthy" => [45, 60, 75, 90],
+            "slow" => [550, 700, 850, 1_000],
+            "client-error" => [25, 35, 45],
+            "throttled" => [35, 50, 65],
+            "failure" => [450, 600, 750],
+            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown demo latency mode."),
+        };
+        return values[Random.Shared.Next(values.Length)];
+    }
 }
