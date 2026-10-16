@@ -13,6 +13,15 @@ public sealed class ProjectsController : ControllerBase
 {
     internal const string UnknownProjectId = "project-unknown";
     private static readonly string[] KnownProjects = ["project-blue", "project-green", "project-red"];
+    private static readonly int[] ReadDelays = [25, 35, 45, 55];
+    private static readonly Dictionary<string, SyncMode> SyncModes = new(StringComparer.Ordinal)
+    {
+        ["healthy"] = new(StatusCodes.Status200OK, [45, 60, 75, 90]),
+        ["slow"] = new(StatusCodes.Status200OK, [550, 700, 850, 1_000]),
+        ["client-error"] = new(StatusCodes.Status400BadRequest, [25, 35, 45], "The requested sync range is invalid."),
+        ["throttled"] = new(StatusCodes.Status429TooManyRequests, [35, 50, 65], "Sync capacity is temporarily exhausted."),
+        ["failure"] = new(StatusCodes.Status503ServiceUnavailable, [450, 600, 750], "The downstream sync service is unavailable."),
+    };
 
     /// <summary>
     /// Returns one project using a consistently fast path.
@@ -43,35 +52,13 @@ public sealed class ProjectsController : ControllerBase
         if (!KnownProjects.Contains(projectId, StringComparer.Ordinal))
             return ProjectNotFound(projectId);
 
-        switch (mode)
-        {
-            case "healthy":
-                await Task.Delay(NextDelay(mode), cancellationToken);
-                return Ok(new { projectId, mode, synchronized = true });
+        if (!SyncModes.TryGetValue(mode, out var scenario))
+            return BadRequest(new { projectId, mode, error = "Unknown demo mode." });
 
-            case "slow":
-                await Task.Delay(NextDelay(mode), cancellationToken);
-                return Ok(new { projectId, mode, synchronized = true });
-
-            case "client-error":
-                await Task.Delay(NextDelay(mode), cancellationToken);
-                return BadRequest(new { projectId, mode, error = "The requested sync range is invalid." });
-
-            case "throttled":
-                await Task.Delay(NextDelay(mode), cancellationToken);
-                return StatusCode(
-                    StatusCodes.Status429TooManyRequests,
-                    new { projectId, mode, error = "Sync capacity is temporarily exhausted." });
-
-            case "failure":
-                await Task.Delay(NextDelay(mode), cancellationToken);
-                return StatusCode(
-                    StatusCodes.Status503ServiceUnavailable,
-                    new { projectId, mode, error = "The downstream sync service is unavailable." });
-
-            default:
-                return BadRequest(new { projectId, mode, error = "Unknown demo mode." });
-        }
+        await Task.Delay(NextDelay(mode), cancellationToken);
+        return scenario.Error is null
+            ? StatusCode(scenario.StatusCode, new { projectId, mode, synchronized = true })
+            : StatusCode(scenario.StatusCode, new { projectId, mode, error = scenario.Error });
     }
 
     private NotFoundObjectResult ProjectNotFound(string projectId)
@@ -84,16 +71,11 @@ public sealed class ProjectsController : ControllerBase
 
     internal static int NextDelay(string mode)
     {
-        ReadOnlySpan<int> values = mode switch
-        {
-            "read" => [25, 35, 45, 55],
-            "healthy" => [45, 60, 75, 90],
-            "slow" => [550, 700, 850, 1_000],
-            "client-error" => [25, 35, 45],
-            "throttled" => [35, 50, 65],
-            "failure" => [450, 600, 750],
-            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown demo latency mode."),
-        };
+        var values = mode == "read" ? ReadDelays
+            : SyncModes.TryGetValue(mode, out var scenario) ? scenario.Delays
+            : throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown demo latency mode.");
         return values[Random.Shared.Next(values.Length)];
     }
+
+    private sealed record SyncMode(int StatusCode, int[] Delays, string? Error = null);
 }

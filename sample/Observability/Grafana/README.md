@@ -12,7 +12,7 @@ There is no external application or downstream service to configure. The operati
 
 ## Start everything with one command
 
-You need Docker with Linux containers and Docker Compose v2. No local .NET SDK is required. The first build downloads the .NET images and restores the sample's NuGet dependencies; subsequent starts use cached images. Restores are cached separately, and each image copies only its own project graph so unrelated source edits do not rebuild both images.
+You need Docker Engine 25 or newer with Linux containers and Docker Compose v2.20.2 or newer. No local .NET SDK is required. The first build downloads the .NET images and restores the sample's NuGet dependencies; subsequent starts use cached images. Restores are cached separately, and each image copies only its own project graph so unrelated source edits do not rebuild both images.
 
 From `sample\Observability\Grafana`:
 
@@ -36,9 +36,11 @@ The command starts five services:
 | `prometheus` | Scrapes and stores the exported metrics |
 | `grafana` | Provisioned dashboard at http://localhost:3000 |
 
-Compose starts `demo-traffic` only after the API's HTTP `/health` probe succeeds. The probe uses the existing .NET runtime, not an extra curl dependency.
+Compose starts `demo-traffic` only after the API's HTTP `/health` probe succeeds. The probe shares the API's route constant and reads its HTTP binding from `ASPNETCORE_URLS` or `ASPNETCORE_HTTP_PORTS`, so changing the configured listening port does not silently break readiness. This HTTP-only demo uses the existing .NET runtime, not an extra curl dependency. Probes run every five seconds during startup and every 30 seconds afterward.
 
 The Docker `demo` profile is optional: plain `docker compose up -d` still starts only the observability stack for use with other samples. All published ports are bound to loopback. Grafana permits anonymous admin access for this local demo; do not expose this configuration as a production deployment.
+
+All five services rotate their JSON logs at 10 MB and retain at most three files per service. This bounds container log storage during a prolonged incident.
 
 ## Explore it like a service owner
 
@@ -78,7 +80,7 @@ docker compose --profile demo logs -f demo-traffic
 
 Ctrl+C exits the log viewer; it does not stop the running demo.
 
-In continuous mode, request transport failures and timeouts are logged immediately and counted separately as `transport-failures` and `timeouts` in phase summaries. The generator keeps running and resumes successful traffic when the API recovers. These client-side counts do not fabricate server SLI observations; use outside-in checks to detect an unreachable service.
+In continuous mode, the first transport failure and first timeout in each phase are logged immediately. Further failures are counted without repeating individual diagnostics; phase summaries retain every `transport-failures` and `timeouts` count. The generator keeps running and resumes successful traffic when the API recovers. It adds no application-level retries or circuit breakers and leaves the intentional 429/503 responses unchanged. These client-side counts do not fabricate server SLI observations; use outside-in checks to detect an unreachable service.
 
 ### What the two SLIs mean
 
@@ -168,7 +170,7 @@ dotnet run --project ..\..\GenerateSli\GenerateSli.csproj -- `
   --wait-for-ready
 ```
 
-Omit `--continuous` for a single five-phase run. Its first request transport failure or timeout stops further sends, cancels/drains outstanding requests, and exits with code 1. Requested shutdown takes precedence over request errors while draining. Invalid options print a concise error and usage with exit code 2.
+Omit `--continuous` for a single five-phase run. Its first request transport failure or timeout stops further sends, cancels/drains outstanding requests, and exits with code 1. Requested shutdown takes precedence over request errors while draining. Secondary cleanup failures are reported without replacing the initiating failure; unexpected request errors also produce a concise diagnostic and exit code 1. Invalid options print a concise error and usage with exit code 2.
 
 Ctrl+C stops either local process gracefully. The generator also handles SIGTERM on Linux and macOS. Windows SIGTERM cannot be canceled by .NET; use Ctrl+C for graceful native Windows shutdown. Stop both processes before running `docker compose down`.
 

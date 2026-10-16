@@ -1,7 +1,14 @@
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.123.0
     restart: unless-stopped
+    logging: *bounded-logging
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
       - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
@@ -13,6 +20,7 @@ services:
   prometheus:
     image: prom/prometheus:v3.3.0
     restart: unless-stopped
+    logging: *bounded-logging
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
@@ -28,6 +36,7 @@ services:
   grafana:
     image: grafana/grafana:11.6.0
     restart: unless-stopped
+    logging: *bounded-logging
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
@@ -50,6 +59,7 @@ services:
       dockerfile: sample/Observability/Grafana/Dockerfile
       target: api
     restart: unless-stopped
+    logging: *bounded-logging
     environment:
       ASPNETCORE_URLS: "http://+:8080"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
@@ -58,10 +68,11 @@ services:
       - "127.0.0.1:5199:8080"
     healthcheck:
       test: ["CMD", "dotnet", "SliProductionDemo.dll", "--health-check"]
-      interval: 5s
+      interval: 30s
+      start_interval: 5s
       timeout: 5s
       start_period: 30s
-      retries: 12
+      retries: 3
     depends_on:
       - otel-collector
 
@@ -72,6 +83,7 @@ services:
       dockerfile: sample/Observability/Grafana/Dockerfile
       target: traffic
     restart: unless-stopped
+    logging: *bounded-logging
     command:
       - "--base-url"
       - "http://demo-api:8080"

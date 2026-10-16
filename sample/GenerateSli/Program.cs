@@ -24,13 +24,11 @@ ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
     cancellation.Cancel();
 };
 Console.CancelKeyPress += cancelHandler;
-using var termination = OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsWindows()
-    ? PosixSignalRegistration.Create(PosixSignal.SIGTERM, context =>
-    {
-        context.Cancel = true;
-        cancellation.Cancel();
-    })
-    : null;
+using var termination = PosixSignalRegistration.Create(PosixSignal.SIGTERM, context =>
+{
+    context.Cancel = true;
+    cancellation.Cancel();
+});
 
 using var client = new HttpClient
 {
@@ -44,37 +42,12 @@ Console.WriteLine(options.Continuous ? "Continuous mode: repeat until stopped." 
 
 try
 {
-    await ScenarioRunner.RunAsync(client, options, Console.Out, Console.Error, cancellation.Token);
-}
-catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-{
-    Console.WriteLine("Scenario stopped.");
-    return 0;
-}
-catch (HttpRequestException) when (cancellation.IsCancellationRequested)
-{
-    Console.WriteLine("Scenario stopped.");
-    return 0;
-}
-catch (HttpRequestException ex)
-{
-    Console.Error.WriteLine(
-        $"Scenario stopped: an HTTP request to {client.BaseAddress} failed. " +
-        $"Start SliProductionDemo, check --base-url, and try again. {ex.Message}");
-    return 1;
-}
-catch (OperationCanceledException ex)
-{
-    Console.Error.WriteLine(
-        $"Scenario stopped: an HTTP request to {client.BaseAddress} timed out. {ex.Message}");
-    return 1;
+    return await ScenarioRunner.RunConsoleAsync(client, options, Console.Out, Console.Error, cancellation.Token);
 }
 finally
 {
     Console.CancelKeyPress -= cancelHandler;
 }
-
-return 0;
 
 internal static class ScenarioRunner
 {
@@ -88,6 +61,43 @@ internal static class ScenarioRunner
         new("Capacity pressure", ScenarioPhase.Throttled),
         new("Recovery", ScenarioPhase.Recovery),
     ];
+
+    public static async Task<int> RunConsoleAsync(
+        HttpClient client,
+        GeneratorOptions options,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken,
+        TimeProvider? timeProvider = null)
+    {
+        var run = RunAsync(client, options, output, error, cancellationToken, timeProvider);
+        await run.ConfigureAwait(
+            ConfigureAwaitOptions.ContinueOnCapturedContext | ConfigureAwaitOptions.SuppressThrowing);
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            output.WriteLine("Scenario stopped.");
+            return 0;
+        }
+
+        if (run.IsCanceled)
+        {
+            error.WriteLine($"Scenario stopped: an HTTP request to {client.BaseAddress} timed out.");
+            return 1;
+        }
+
+        if (run.Exception is { } fault)
+        {
+            var failure = fault.InnerExceptions[0];
+            error.WriteLine(failure is HttpRequestException
+                ? $"Scenario stopped: an HTTP request to {client.BaseAddress} failed. " +
+                  $"Start SliProductionDemo, check --base-url, and try again. {failure.Message}"
+                : $"Scenario stopped: {failure.GetType().Name}: {failure.Message}");
+            return 1;
+        }
+
+        return 0;
+    }
 
     public static async Task RunAsync(
         HttpClient client,
@@ -199,8 +209,17 @@ internal static class ScenarioRunner
 
                     var completed = pending[i];
                     pending.RemoveAt(i);
+                    if (completed.Exception is { } fault)
+                    {
+                        failure = ExceptionDispatchInfo.Capture(fault.InnerExceptions[0]);
+                        break;
+                    }
+
                     await completed;
                 }
+
+                if (failure is not null)
+                    break;
 
                 var elapsed = timeProvider.GetElapsedTime(started);
                 if (elapsed >= duration || pending.Count == MaximumInFlightRequests)
@@ -244,18 +263,22 @@ internal static class ScenarioRunner
         }
         finally
         {
-            await phaseCancellation.CancelAsync();
-            try
+            var stopping = Task.WhenAll(phaseCancellation.CancelAsync(), Task.WhenAll(pending));
+            await stopping.ConfigureAwait(
+                ConfigureAwaitOptions.ContinueOnCapturedContext | ConfigureAwaitOptions.SuppressThrowing);
+            if (stopping.Exception is { } faults)
             {
-                await Task.WhenAll(pending);
+                foreach (var exception in faults.Flatten().InnerExceptions)
+                {
+                    if (failure is null)
+                        failure = ExceptionDispatchInfo.Capture(exception);
+                    else
+                        error.WriteLine($"Additional failure while stopping: {exception.GetType().Name}: {exception.Message}");
+                }
             }
-            catch (HttpRequestException ex)
+            else if (stopping.IsCanceled && failure is null)
             {
-                failure ??= ExceptionDispatchInfo.Capture(ex);
-            }
-            catch (OperationCanceledException ex)
-            {
-                failure ??= ExceptionDispatchInfo.Capture(ex);
+                failure = ExceptionDispatchInfo.Capture(new TaskCanceledException(stopping));
             }
         }
 
@@ -304,13 +327,19 @@ internal static class ScenarioRunner
         }
         catch (HttpRequestException ex) when (continuous && !cancellationToken.IsCancellationRequested)
         {
-            requestCounts.AddOrUpdate("transport-failures", 1, static (_, count) => count + 1);
-            error.WriteLine($"Request {request.RequestUri} failed: {ex.Message} Continuing traffic.");
+            var count = requestCounts.AddOrUpdate("transport-failures", 1, static (_, count) => count + 1);
+            if (count == 1)
+                error.WriteLine(
+                    $"Request {request.RequestUri} failed: {ex.Message} Continuing traffic. " +
+                    "Further transport failures are included in this phase's summary.");
         }
         catch (OperationCanceledException ex) when (continuous && !cancellationToken.IsCancellationRequested)
         {
-            requestCounts.AddOrUpdate("timeouts", 1, static (_, count) => count + 1);
-            error.WriteLine($"Request {request.RequestUri} timed out: {ex.Message} Continuing traffic.");
+            var count = requestCounts.AddOrUpdate("timeouts", 1, static (_, count) => count + 1);
+            if (count == 1)
+                error.WriteLine(
+                    $"Request {request.RequestUri} timed out: {ex.Message} Continuing traffic. " +
+                    "Further timeouts are included in this phase's summary.");
         }
     }
 }

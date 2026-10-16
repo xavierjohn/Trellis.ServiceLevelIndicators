@@ -1,14 +1,17 @@
 ﻿using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
+using SliProductionDemo;
 using SliProductionDemo.Controllers;
 using Trellis.ServiceLevelIndicators;
 
-if (args is ["--health-check"])
+var healthCheck = args is ["--health-check"];
+var builder = WebApplication.CreateBuilder(healthCheck ? [] : args);
+if (healthCheck)
 {
     using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
     try
     {
-        using var response = await client.GetAsync("http://localhost:8080/health");
+        using var response = await client.GetAsync(DemoReadiness.GetUri(builder.Configuration));
         if (response.IsSuccessStatusCode)
             return 0;
 
@@ -22,11 +25,17 @@ if (args is ["--health-check"])
     {
         Console.Error.WriteLine($"Demo readiness check timed out: {ex.Message}");
     }
+    catch (FormatException ex)
+    {
+        Console.Error.WriteLine($"Demo readiness configuration is invalid: {ex.Message}");
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.Error.WriteLine($"Demo readiness configuration is invalid: {ex.Message}");
+    }
 
     return 1;
 }
-
-var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddOpenTelemetry()
@@ -51,7 +60,7 @@ builder.Services.AddServiceLevelIndicator(options =>
 var app = builder.Build();
 
 app.UseServiceLevelIndicator();
-app.MapGet("/health", () => Results.Ok(new { status = "Healthy" }))
+app.MapGet(DemoReadiness.Path, () => Results.Ok(new { status = "Healthy" }))
     .ExcludeFromServiceLevelIndicator();
 app.MapControllers();
 

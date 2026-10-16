@@ -1,7 +1,9 @@
 ﻿namespace GenerateSli.Tests;
 
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Time.Testing;
 
 public sealed class ScenarioTests
@@ -147,7 +149,7 @@ public sealed class ScenarioTests
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         using var client = CreateClient(request =>
         {
-            if (request.RequestUri!.AbsolutePath != "/health" && ++requests == 1)
+            if (request.RequestUri!.AbsolutePath != "/health" && Interlocked.Increment(ref requests) == 1)
             {
                 if (timeout)
                     throw new TaskCanceledException("Simulated request timeout.");
@@ -176,6 +178,44 @@ public sealed class ScenarioTests
     }
 
     [Theory]
+    [InlineData(false, "transport-failures", "failed")]
+    [InlineData(true, "timeouts", "timed out")]
+    public async Task Repeated_continuous_failures_are_counted_without_per_request_log_flooding(
+        bool timeout, string countName, string diagnostic)
+    {
+        var requests = 0;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var client = CreateClient(request =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/health")
+                return new(HttpStatusCode.OK);
+
+            Interlocked.Increment(ref requests);
+            if (timeout)
+                throw new TaskCanceledException("Simulated request timeout.");
+
+            throw new HttpRequestException("Simulated API outage.");
+        });
+        using var output = new CycleCancellingWriter(cancellation, "Cycle 2");
+        using var error = new StringWriter();
+        var time = new FakeTimeProvider();
+        var run = ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 1, 1_000, Continuous: true), output, error, cancellation.Token, time);
+
+        var act = () => AdvanceUntilCompleteAsync(run, time);
+        await act.Should().ThrowAsync<OperationCanceledException>();
+
+        var diagnostics = error.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        diagnostics.Should().HaveCount(5, "each phase logs only its first failure of each kind");
+        diagnostics.Should().OnlyContain(line => line.Contains(diagnostic, StringComparison.Ordinal));
+        var summaries = Regex.Matches(output.ToString(), countName + @"=(\d+)");
+        summaries.Should().HaveCount(5);
+        summaries.Sum(match => int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture))
+            .Should().Be(requests);
+        requests.Should().BeGreaterThan(5);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Finite_mode_stops_sending_immediately_after_a_transport_failure_or_timeout(bool timeout)
@@ -186,7 +226,7 @@ public sealed class ScenarioTests
             if (request.RequestUri!.AbsolutePath == "/health")
                 return new(HttpStatusCode.OK);
 
-            requests++;
+            Interlocked.Increment(ref requests);
             if (timeout)
                 throw new TaskCanceledException("Simulated request timeout.");
 
@@ -249,6 +289,67 @@ public sealed class ScenarioTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_unexpected_drain_failure_cannot_replace_the_original_failure_or_user_shutdown(bool shutdown)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var first = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondToken = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = 0;
+        using var client = CreateClient((request, token) =>
+        {
+            if (request.RequestUri!.AbsolutePath == "/health")
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+
+            if (Interlocked.Increment(ref requests) == 1)
+                return first.Task;
+
+            secondToken.TrySetResult(token);
+            return second.Task;
+        });
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var time = new FakeTimeProvider();
+        var original = new HttpRequestException("The initiating request failure.");
+        var run = ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 30, 10), output, error, cancellation.Token, time);
+
+        try
+        {
+            await AdvanceUntilAsync(() => secondToken.Task.IsCompleted, time);
+            first.SetException(original);
+            await AdvanceUntilAsync(() => secondToken.Task.Result.IsCancellationRequested, time, TimeSpan.Zero);
+            if (shutdown)
+                cancellation.Cancel();
+            second.SetException(new InvalidOperationException("An unexpected secondary failure."));
+
+            var act = () => AdvanceUntilCompleteAsync(run, time);
+            if (shutdown)
+            {
+                await act.Should().ThrowAsync<OperationCanceledException>();
+            }
+            else
+            {
+                var exception = await act.Should().ThrowAsync<HttpRequestException>();
+                exception.Which.Should().BeSameAs(original);
+            }
+
+            error.ToString().Should().Contain("Additional failure while stopping")
+                .And.Contain("InvalidOperationException").And.Contain("unexpected secondary failure");
+        }
+        finally
+        {
+            cancellation.Cancel();
+            first.TrySetCanceled(cancellation.Token);
+            second.TrySetCanceled(cancellation.Token);
+            await run.ConfigureAwait(
+                ConfigureAwaitOptions.ContinueOnCapturedContext | ConfigureAwaitOptions.SuppressThrowing);
+        }
+    }
+
     [Fact]
     public async Task A_failure_after_the_phase_window_cancels_other_in_flight_requests()
     {
@@ -298,14 +399,14 @@ public sealed class ScenarioTests
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var requests = 0;
         var active = 0;
-        var maximum = 0;
+        var concurrency = new ConcurrentQueue<int>();
         using var client = CreateClient(async (request, token) =>
         {
             if (request.RequestUri!.AbsolutePath == "/health")
                 return new(HttpStatusCode.OK);
 
             Interlocked.Increment(ref requests);
-            maximum = Math.Max(maximum, Interlocked.Increment(ref active));
+            concurrency.Enqueue(Interlocked.Increment(ref active));
             try
             {
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
@@ -317,7 +418,7 @@ public sealed class ScenarioTests
             }
         });
         using var output = new StringWriter();
-        using var error = new StringWriter();
+        using var error = new BackpressureObservingWriter();
         var time = new FakeTimeProvider();
         var run = ScenarioRunner.RunAsync(
             client, new(client.BaseAddress!, 30, 1_000, Continuous: continuous),
@@ -325,13 +426,13 @@ public sealed class ScenarioTests
 
         try
         {
-            await AdvanceUntilAsync(() => Volatile.Read(ref requests) >= 32, time);
+            await AdvanceUntilAsync(() => error.LimitReached.Task.IsCompleted, time);
             time.Advance(TimeSpan.FromSeconds(5));
             await Task.Yield();
 
-            requests.Should().Be(32);
-            maximum.Should().Be(32);
-            active.Should().Be(32);
+            Volatile.Read(ref requests).Should().Be(32);
+            concurrency.Max().Should().Be(32);
+            Volatile.Read(ref active).Should().Be(32);
             error.ToString().Should().Contain("In-flight limit (32) reached");
         }
         finally
@@ -341,7 +442,7 @@ public sealed class ScenarioTests
             await stop.Should().ThrowAsync<OperationCanceledException>();
         }
 
-        active.Should().Be(0);
+        Volatile.Read(ref active).Should().Be(0);
     }
 
     [Fact]
@@ -429,7 +530,7 @@ public sealed class ScenarioTests
         {
             if (request.RequestUri!.AbsolutePath != "/health")
             {
-                requests++;
+                Interlocked.Increment(ref requests);
                 time.Advance(TimeSpan.FromMilliseconds(100));
             }
 
@@ -453,7 +554,7 @@ public sealed class ScenarioTests
         using var client = CreateClient(request =>
         {
             request.RequestUri!.AbsolutePath.Should().Be("/health");
-            return new(++healthChecks < 3 ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK);
+            return new(Interlocked.Increment(ref healthChecks) < 3 ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK);
         });
         using var output = new CycleCancellingWriter(cancellation, "Cycle 1");
         using var error = new StringWriter();
@@ -477,7 +578,7 @@ public sealed class ScenarioTests
         using var client = CreateClient(request =>
         {
             request.RequestUri!.AbsolutePath.Should().Be("/health");
-            if (++healthChecks == 1)
+            if (Interlocked.Increment(ref healthChecks) == 1)
                 throw new TaskCanceledException("Simulated readiness timeout.");
 
             return new(HttpStatusCode.OK);
@@ -533,6 +634,51 @@ public sealed class ScenarioTests
         output.ToString().Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("transport", "an HTTP request")]
+    [InlineData("timeout", "timed out")]
+    [InlineData("unexpected", "InvalidOperationException")]
+    public async Task Console_failures_are_reported_without_an_unhandled_stack_trace(string kind, string diagnostic)
+    {
+        Exception failure = kind switch
+        {
+            "transport" => new HttpRequestException("Simulated transport failure."),
+            "timeout" => new TaskCanceledException("Simulated request timeout."),
+            _ => new InvalidOperationException("Simulated unexpected request failure."),
+        };
+        using var client = CreateClient(request =>
+            request.RequestUri!.AbsolutePath == "/health" ? new(HttpStatusCode.OK) : throw failure);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var time = new FakeTimeProvider();
+        var run = ScenarioRunner.RunConsoleAsync(
+            client, new(client.BaseAddress!, 30, 10), output, error, TestContext.Current.CancellationToken, time);
+
+        await AdvanceUntilCompleteAsync(run, time);
+
+        (await run).Should().Be(1);
+        error.ToString().Should().Contain("Scenario stopped:").And.Contain(diagnostic)
+            .And.NotContain("Unhandled exception").And.NotContain("   at ");
+        output.ToString().Should().NotContain("Scenario complete.");
+    }
+
+    [Fact]
+    public async Task Console_shutdown_returns_zero_without_reporting_a_timeout()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cancellation.Cancel();
+        using var client = CreateClient(_ => new(HttpStatusCode.OK));
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await ScenarioRunner.RunConsoleAsync(
+            client, new(client.BaseAddress!, 30, 10), output, error, cancellation.Token);
+
+        exitCode.Should().Be(0);
+        output.ToString().Should().Contain("Scenario stopped.");
+        error.ToString().Should().BeEmpty();
+    }
+
     private static async Task AdvanceUntilCompleteAsync(Task run, FakeTimeProvider time)
     {
         await AdvanceUntilAsync(() => run.IsCompleted, time);
@@ -549,7 +695,8 @@ public sealed class ScenarioTests
                 static () => { },
                 TestContext.Current.CancellationToken,
                 TaskCreationOptions.PreferFairness,
-                TaskScheduler.Default);
+                TaskScheduler.Default).ConfigureAwait(
+                    ConfigureAwaitOptions.ContinueOnCapturedContext | ConfigureAwaitOptions.ForceYielding);
         }
 
         completed().Should().BeTrue("the scenario should make progress within bounded virtual-time steps");
@@ -581,6 +728,18 @@ public sealed class ScenarioTests
             if (request.RequestUri!.AbsolutePath != "/health")
                 FirstPayload ??= send;
             return send;
+        }
+    }
+
+    private sealed class BackpressureObservingWriter : StringWriter
+    {
+        public TaskCompletionSource LimitReached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override void WriteLine(string? value)
+        {
+            base.WriteLine(value);
+            if (value?.StartsWith("In-flight limit", StringComparison.Ordinal) == true)
+                LimitReached.TrySetResult();
         }
     }
 
