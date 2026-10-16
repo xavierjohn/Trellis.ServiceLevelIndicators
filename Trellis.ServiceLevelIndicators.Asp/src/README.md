@@ -186,6 +186,14 @@ builder.Services.AddServiceLevelIndicator(options => options.LocationId = locati
 
 The existing one-argument callback remains a replacement classifier. Last fluent registration wins across both overloads. For direct options configuration, `ServiceLevelIndicatorHttpOptions.ClassifyOutcomeWithDefault` takes precedence over `ClassifyOutcome` when both are set. Neither callback overrides request aborts or escaping exceptions.
 
+If a callback throws or returns an undefined outcome, the middleware logs a warning, uses the already-computed built-in status outcome, and continues enrichment. It does not try a lower-priority callback or turn the handler's completion into a classifier exception. This ambient HTTP policy differs from explicit core result selectors, whose errors still propagate.
+
+**Fallback changes the SLO population.** A custom-ignored `/health` request can become `Success`; a custom client-error 429 can become `Failure`. Monitor `HttpOutcomeClassificationFailed` (EventSource event 3), which includes the fallback outcome and is emitted independently of warning-log filtering. Enrichment errors likewise emit `EnrichmentFailed` (event 4), even with a no-op logger. Enable collection of provider `Trellis-ServiceLevelIndicators` to observe these events.
+
+Enrichment and diagnostic-logger failures do not replace handler exceptions or change responses. A broken logger is reported through EventSource provider `Trellis-ServiceLevelIndicators`, event 2 (`DiagnosticLoggingFailed`). Recording failures are reported by the core and are not thrown from measurement disposal; failed recording is not retried.
+
+ASP uses the public `ServiceLevelIndicatorEventSource` contract and public outcome validation, not core internals; compatible core updates do not require an exact-version package pin. Exception-text fields are capped at 2048 UTF-16 code units, not redacted, and can still contain request data. A recording-provider failure after histogram delivery can leave threshold counts behind; cross-instrument reconciliation is not guaranteed on failure.
+
 ### Enrich with custom data
 
 Use `Enrich` (or `EnrichAsync`) to set `CustomerResourceId` from a stable identifier on the request (a tenant/subscription claim, a header, etc.) or to add custom attributes. **Do not use the caller's identity (UPN, user ID) as `CustomerResourceId`** — that's the caller, not the resource being acted on. See [What `CustomerResourceId` is — and what it is NOT](#what-customerresourceid-is--and-what-it-is-not).

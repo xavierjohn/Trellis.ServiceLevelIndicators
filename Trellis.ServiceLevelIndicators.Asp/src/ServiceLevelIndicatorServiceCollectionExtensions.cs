@@ -26,6 +26,8 @@ public static class ServiceLevelIndicatorServiceCollectionExtensions
     /// <summary>
     /// Replaces status-code classification for normally completed HTTP requests.
     /// The last classifier registration wins across both overloads.
+    /// Callback exceptions and undefined outcomes are logged; built-in classification is used instead.
+    /// This can change the SLO population; EventSource reports the failure independently of logging configuration.
     /// </summary>
     public static IServiceLevelIndicatorBuilder ClassifyHttpOutcome(this IServiceLevelIndicatorBuilder builder, Func<HttpContext, SliOutcome> classifier)
     {
@@ -44,6 +46,8 @@ public static class ServiceLevelIndicatorServiceCollectionExtensions
     /// Customizes normally completed HTTP requests using the built-in status-code outcome.
     /// Abort and escaping-exception handling take precedence.
     /// The last classifier registration wins across both overloads.
+    /// Callback exceptions and undefined outcomes are logged; built-in classification is used instead.
+    /// This can change the SLO population; EventSource reports the failure independently of logging configuration.
     /// </summary>
     public static IServiceLevelIndicatorBuilder ClassifyHttpOutcome(
         this IServiceLevelIndicatorBuilder builder,

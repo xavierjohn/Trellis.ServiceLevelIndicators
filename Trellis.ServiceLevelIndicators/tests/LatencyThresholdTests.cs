@@ -249,12 +249,15 @@ public sealed class LatencyThresholdTests
     {
         using var capture = new MetricCapture();
         using var sli = CreateSli(capture, TimeSpan.FromSeconds(2));
+        using var diagnostics = new InstrumentationDiagnosticsCapture("Work");
         var operation = sli.StartMeasuring("Work");
         operation.Attributes.Add(new(name, "override"));
 
         Action dispose = operation.Dispose;
 
-        dispose.Should().Throw<InvalidOperationException>();
+        dispose.Should().NotThrow();
+        diagnostics.Failures.Should().ContainSingle()
+            .Which.Data["error"].Should().BeOfType<string>().Which.Should().Contain("added more than once");
         capture.Measurements.Should().BeEmpty();
     }
 

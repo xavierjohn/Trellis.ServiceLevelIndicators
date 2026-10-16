@@ -6,7 +6,8 @@ using System.Diagnostics;
 
 /// <summary>
 /// Represents an in-flight measured operation. Disposing this instance stops the stopwatch
-/// and records the elapsed time as a metric.
+/// and attempts to record the elapsed time once. Recording failures are reported through
+/// diagnostic logging and EventSource, not thrown from disposal.
 /// </summary>
 public class MeasuredOperation : IDisposable
 {
@@ -60,8 +61,10 @@ public class MeasuredOperation : IDisposable
     /// Sets the outcome recorded with the measurement.
     /// </summary>
     /// <param name="outcome">The SLI outcome.</param>
+    /// <exception cref="ArgumentOutOfRangeException">The outcome is not a defined <see cref="SliOutcome"/>.</exception>
     public void SetOutcome(SliOutcome outcome)
     {
+        _ = ServiceLevelIndicator.ToWireValue(outcome);
         _outcome = outcome;
         _outcomeExplicitlySet = true;
     }
@@ -115,14 +118,20 @@ public class MeasuredOperation : IDisposable
         {
             if (!_disposed)
             {
+                _disposed = true;
                 if (disposing)
                 {
                     _stopWatch.Stop();
-                    var elapsedTime = _stopWatch.ElapsedMilliseconds;
-                    _serviceLevelIndicator.RecordMeasurement(Operation, CustomerResourceId, elapsedTime, _outcome, Attributes.ToArray());
+                    try
+                    {
+                        var elapsedTime = _stopWatch.ElapsedMilliseconds;
+                        _serviceLevelIndicator.RecordMeasurement(Operation, CustomerResourceId, elapsedTime, _outcome, Attributes.ToArray());
+                    }
+                    catch (Exception ex)
+                    {
+                        _serviceLevelIndicator.ReportRecordingFailure(Operation, ex);
+                    }
                 }
-
-                _disposed = true;
             }
         }
     }

@@ -84,7 +84,7 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
                     }
                     catch (Exception ex)
                     {
-                        LogEnrichmentFailed(ex, enrichment.GetType().Name);
+                        ReportEnrichmentFailure(ex, enrichment.GetType().Name, measuredOperation.Operation);
                     }
                 }
             }
@@ -98,8 +98,52 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
     [LoggerMessage(Level = LogLevel.Warning, Message = "SLI enrichment {EnrichmentType} failed.")]
     partial void LogEnrichmentFailed(Exception ex, string enrichmentType);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SLI HTTP outcome classifier failed; using the built-in status-code classification {DefaultOutcome}.")]
+    partial void LogClassifierFailed(Exception ex, SliOutcome defaultOutcome);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "SLI middleware could not resolve a route template for endpoint {Endpoint}; emitting bounded sentinel '<unrouted>' to avoid metric cardinality explosion. Set [ServiceLevelIndicator(Operation = \"...\")] or use a routed endpoint to fix this.")]
     partial void LogMissingRouteTemplate(string endpoint);
+
+    private void ReportEnrichmentFailure(Exception exception, string enrichmentType, string operation)
+    {
+        ServiceLevelIndicatorEventSource.Log.ReportEnrichmentFailure(operation, enrichmentType, exception);
+        try
+        {
+            LogEnrichmentFailed(exception, enrichmentType);
+        }
+        catch (Exception loggingException)
+        {
+            ServiceLevelIndicatorEventSource.Log.ReportLoggingFailure(
+                operation, "enrichment", exception, loggingException);
+        }
+    }
+
+    private void ReportClassifierFailure(Exception exception, SliOutcome defaultOutcome, string operation)
+    {
+        ServiceLevelIndicatorEventSource.Log.ReportClassifierFailure(operation, defaultOutcome, exception);
+        try
+        {
+            LogClassifierFailed(exception, defaultOutcome);
+        }
+        catch (Exception loggingException)
+        {
+            ServiceLevelIndicatorEventSource.Log.ReportLoggingFailure(
+                operation, "HTTP classification", exception, loggingException);
+        }
+    }
+
+    private void LogMissingRouteTemplateSafely(HttpContext context, string operation)
+    {
+        try
+        {
+            LogMissingRouteTemplate(context.GetEndpoint()?.DisplayName ?? "(no endpoint)");
+        }
+        catch (Exception loggingException)
+        {
+            ServiceLevelIndicatorEventSource.Log.ReportLoggingFailure(
+                operation, "route resolution", null, loggingException);
+        }
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void SetCustomerResourceIdFromAttribute(HttpContext context, EndpointMetadataCollection metadata, MeasuredOperation measuredOperation)
@@ -136,9 +180,19 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
         else
         {
             var defaultOutcome = HttpOutcomeClassifier.ClassifyStatusCode(statusCode);
-            outcome = _httpOptions.ClassifyOutcomeWithDefault?.Invoke(context, defaultOutcome)
-                ?? _httpOptions.ClassifyOutcome?.Invoke(context)
-                ?? defaultOutcome;
+            try
+            {
+                outcome = _httpOptions.ClassifyOutcomeWithDefault?.Invoke(context, defaultOutcome)
+                    ?? _httpOptions.ClassifyOutcome?.Invoke(context)
+                    ?? defaultOutcome;
+                measuredOperation.SetOutcome(outcome);
+                return;
+            }
+            catch (Exception ex)
+            {
+                outcome = defaultOutcome;
+                ReportClassifierFailure(ex, defaultOutcome, measuredOperation.Operation);
+            }
         }
 
         measuredOperation.SetOutcome(outcome);
@@ -168,8 +222,9 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
         // (HTTP method count) x (endpoint count) rather than exploding to one series per concrete request path.
         if (string.IsNullOrEmpty(template))
         {
-            LogMissingRouteTemplate(context.GetEndpoint()?.DisplayName ?? "(no endpoint)");
-            return context.Request.Method.ToUpperInvariant() + " <unrouted>";
+            var operation = context.Request.Method.ToUpperInvariant() + " <unrouted>";
+            LogMissingRouteTemplateSafely(context, operation);
+            return operation;
         }
 
         // A route group's root endpoint yields a trailing slash in the raw template (e.g. a "/orders"
