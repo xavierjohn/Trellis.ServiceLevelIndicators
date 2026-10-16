@@ -36,11 +36,13 @@ The command starts five services:
 | `prometheus` | Scrapes and stores the exported metrics |
 | `grafana` | Provisioned dashboard at http://localhost:3000 |
 
-Compose starts `demo-traffic` only after the API's HTTP `/health` probe succeeds. The probe shares the API's route constant and reads its HTTP binding from `ASPNETCORE_URLS` or `ASPNETCORE_HTTP_PORTS`, so changing the configured listening port does not silently break readiness. This HTTP-only demo uses the existing .NET runtime, not an extra curl dependency. Probes run every five seconds during startup and every 30 seconds afterward.
+Compose starts `demo-traffic` only after the API's HTTP `/health` probe succeeds. The probe shares the API's route constant and reads the same host configuration, including `ASPNETCORE_URLS`, `ASPNETCORE_HTTP_PORTS`, command-line `--urls`, and `Kestrel:Endpoints:*:Url`. Explicit Kestrel endpoints take precedence unless `preferHostingUrls` selects configured hosting addresses. The probe accepts extra host arguments; if you change the API's command-line binding, pass the same arguments to its probe. This HTTP-only demo uses the existing .NET runtime, not an extra curl dependency. Probes run every five seconds during startup and every 30 seconds afterward.
 
 The Docker `demo` profile is optional: plain `docker compose up -d` still starts only the observability stack for use with other samples. All published ports are bound to loopback. Grafana permits anonymous admin access for this local demo; do not expose this configuration as a production deployment.
 
 All five services rotate their JSON logs at 10 MB and retain at most three files per service. This bounds container log storage during a prolonged incident.
+
+Prometheus retention is configured for 24 hours or 256 MB, whichever triggers first, rather than its default 15 days. Retention deletes persisted blocks in the background; the active head, write-ahead log, and compaction can require additional space, so this is not a hard disk quota.
 
 ## Explore it like a service owner
 
@@ -135,7 +137,7 @@ This stops the API, generator, and observability services. Prometheus and Grafan
 docker compose --profile demo down --volumes
 ```
 
-The running services restart after an unexpected exit. Stopping them with Compose prevents automatic restart until you start them again.
+All services, including the standalone observability stack, restart after an unexpected exit or Docker/host restart. Stopping them with Compose prevents automatic restart until you start them again.
 
 ## Troubleshooting
 
@@ -159,6 +161,15 @@ $env:ASPNETCORE_URLS = "http://localhost:5199"
 dotnet run --no-launch-profile --project ..\..\SliProductionDemo\SliProductionDemo.csproj
 ```
 
+To check the same API with an explicit command-line binding:
+
+```powershell
+dotnet run --no-launch-profile --project ..\..\SliProductionDemo\SliProductionDemo.csproj -- `
+  --health-check --urls http://localhost:5199
+```
+
+Probe mode never starts another web server. It needs the same environment, configuration files, and binding arguments as the running API; it cannot infer another process's command line. Programmatically added Kestrel listeners, Unix sockets, dynamic port `0`, and HTTPS-only listeners are outside this demo probe's scope.
+
 Traffic:
 
 ```powershell
@@ -172,6 +183,6 @@ dotnet run --project ..\..\GenerateSli\GenerateSli.csproj -- `
 
 Omit `--continuous` for a single five-phase run. Its first request transport failure or timeout stops further sends, cancels/drains outstanding requests, and exits with code 1. Requested shutdown takes precedence over request errors while draining. Secondary cleanup failures are reported without replacing the initiating failure; unexpected request errors also produce a concise diagnostic and exit code 1. Invalid options print a concise error and usage with exit code 2.
 
-Ctrl+C stops either local process gracefully. The generator also handles SIGTERM on Linux and macOS. Windows SIGTERM cannot be canceled by .NET; use Ctrl+C for graceful native Windows shutdown. Stop both processes before running `docker compose down`.
+Ctrl+C stops either local process gracefully. A second Ctrl+C forces the generator to exit if graceful request draining is stuck; a second SIGTERM also permits termination on Linux and macOS. Windows SIGTERM cannot be canceled by .NET; use Ctrl+C for graceful native Windows shutdown. Stop both processes before running `docker compose down`.
 
 The [focused Minimal API and API-versioned examples](../../../docs/usage-reference.md#running-the-focused-examples) can reuse this stack and already configure the 250 ms threshold. Their `Api.http` files contain example requests; this traffic generator targets only the continuous demo's Project Tracker API. The dashboard aggregates matching SLI dimensions across services, so stop the focused examples when exploring the continuous demo in isolation.

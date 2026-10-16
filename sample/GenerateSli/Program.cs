@@ -18,17 +18,11 @@ catch (ArgumentException ex)
 }
 
 using var cancellation = new CancellationTokenSource();
-ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
-{
-    eventArgs.Cancel = true;
-    cancellation.Cancel();
-};
+var shutdown = new GeneratorShutdown(cancellation);
+ConsoleCancelEventHandler cancelHandler = (_, eventArgs) => eventArgs.Cancel = shutdown.RequestCancellation();
 Console.CancelKeyPress += cancelHandler;
-using var termination = PosixSignalRegistration.Create(PosixSignal.SIGTERM, context =>
-{
-    context.Cancel = true;
-    cancellation.Cancel();
-});
+using var termination = PosixSignalRegistration.Create(
+    PosixSignal.SIGTERM, context => context.Cancel = shutdown.RequestCancellation());
 
 using var client = new HttpClient
 {
@@ -47,6 +41,20 @@ try
 finally
 {
     Console.CancelKeyPress -= cancelHandler;
+}
+
+internal sealed class GeneratorShutdown(CancellationTokenSource cancellation)
+{
+    private int requested;
+
+    public bool RequestCancellation()
+    {
+        if (Interlocked.Exchange(ref requested, 1) != 0)
+            return false;
+
+        cancellation.Cancel();
+        return true;
+    }
 }
 
 internal static class ScenarioRunner

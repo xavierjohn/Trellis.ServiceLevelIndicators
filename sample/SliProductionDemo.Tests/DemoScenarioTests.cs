@@ -170,6 +170,8 @@ public sealed class DemoScenarioTests
     [InlineData("http://0.0.0.0:8099", null, "http://localhost:8099/health")]
     [InlineData("http://[::]:8100", null, "http://localhost:8100/health")]
     [InlineData("http://127.0.0.1:8101", null, "http://127.0.0.1:8101/health")]
+    [InlineData("http://[::1]:8101", null, "http://[::1]:8101/health")]
+    [InlineData("http://unresolvable.demo:8101", null, "http://localhost:8101/health")]
     [InlineData("http://localhost:8102;http://+:8103", null, "http://localhost:8102/health")]
     [InlineData("https://localhost:8443;http://+:8104", null, "http://localhost:8104/health")]
     [InlineData(null, "8105;8106", "http://localhost:8105/health")]
@@ -186,16 +188,98 @@ public sealed class DemoScenarioTests
         DemoReadiness.GetUri(configuration).Should().Be(new Uri(expectedUri));
     }
 
-    [Fact]
-    public void Readiness_rejects_a_configuration_without_a_probeable_http_listener()
+    [Theory]
+    [InlineData(null, null, false, "http://localhost:8120/health")]
+    [InlineData("http://+:8110", "8111", false, "http://localhost:8120/health")]
+    [InlineData("http://+:8110", "8111", true, "http://localhost:8110/health")]
+    [InlineData(null, "8111", true, "http://localhost:8111/health")]
+    [InlineData(null, null, true, "http://localhost:8120/health")]
+    public void Readiness_matches_Kestrel_endpoint_and_hosting_address_precedence(
+        string? urls, string? httpPorts, bool preferHostingUrls, string expectedUri)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            [WebHostDefaults.ServerUrlsKey] = "https://localhost:8443",
+            [WebHostDefaults.ServerUrlsKey] = urls,
+            [WebHostDefaults.HttpPortsKey] = httpPorts,
+            [WebHostDefaults.PreferHostingUrlsKey] = preferHostingUrls.ToString(),
+            ["Kestrel:Endpoints:A-Https:Url"] = "https://localhost:8443",
+            ["Kestrel:Endpoints:Z-Http:Url"] = "http://+:8120",
+        }).Build();
+
+        DemoReadiness.GetUri(configuration).Should().Be(new Uri(expectedUri));
+    }
+
+    [Theory]
+    [InlineData("--urls")]
+    [InlineData("--Kestrel:Endpoints:Http:Url")]
+    public void Readiness_uses_command_line_binding_overrides(string option)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [WebHostDefaults.ServerUrlsKey] = "http://+:8080",
+            })
+            .AddCommandLine([option, "http://127.0.0.1:8121"])
+            .Build();
+
+        DemoReadiness.GetUri(configuration).Should().Be(new Uri("http://127.0.0.1:8121/health"));
+    }
+
+    [Theory]
+    [InlineData("urls", "https://localhost:8443")]
+    [InlineData("https_ports", "8443")]
+    [InlineData("Kestrel:Endpoints:Https:Url", "https://localhost:8443")]
+    [InlineData("urls", "http://localhost:0")]
+    [InlineData("urls", "http://localhost:70000")]
+    [InlineData("urls", "http://localhost:8080/base")]
+    public void Readiness_rejects_a_configuration_without_a_probeable_http_listener(string key, string value)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [key] = value,
         }).Build();
 
         var act = () => DemoReadiness.GetUri(configuration);
         act.Should().Throw<InvalidOperationException>().WithMessage("*requires an HTTP listener*");
+    }
+
+    [Theory]
+    [InlineData("http://+:not-a-port")]
+    [InlineData("http://localhost:invalid")]
+    public void Readiness_does_not_hide_malformed_ports_as_wildcard_hostnames(string urls)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [WebHostDefaults.ServerUrlsKey] = urls,
+        }).Build();
+
+        var act = () => DemoReadiness.GetUri(configuration);
+        act.Should().Throw<FormatException>();
+    }
+
+    [Fact]
+    public void Readiness_does_not_probe_a_hosting_url_overridden_by_https_only_endpoints()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [WebHostDefaults.ServerUrlsKey] = "http://+:8080",
+            ["Kestrel:Endpoints:Https:Url"] = "https://localhost:8443",
+        }).Build();
+
+        var act = () => DemoReadiness.GetUri(configuration);
+        act.Should().Throw<InvalidOperationException>().WithMessage("*requires an HTTP listener*");
+    }
+
+    [Fact]
+    public void Readiness_reports_a_missing_Kestrel_endpoint_url()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Kestrel:Endpoints:Http:Protocols"] = "Http1",
+        }).Build();
+
+        var act = () => DemoReadiness.GetUri(configuration);
+        act.Should().Throw<InvalidOperationException>().WithMessage("*'Http'*Url*");
     }
 
     private sealed class DemoApplicationFactory(MetricCapture capture) : WebApplicationFactory<Program>

@@ -680,6 +680,61 @@ public sealed class ScenarioTests
         error.ToString().Should().BeEmpty();
     }
 
+    [Fact]
+    public void Only_the_first_stop_signal_suppresses_process_termination()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var shutdown = new GeneratorShutdown(cancellation);
+
+        shutdown.RequestCancellation().Should().BeTrue();
+        cancellation.IsCancellationRequested.Should().BeTrue();
+        shutdown.RequestCancellation().Should().BeFalse();
+        shutdown.RequestCancellation().Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Concurrent_stop_signals_only_suppress_one_termination()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var shutdown = new GeneratorShutdown(cancellation);
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 32)
+            .Select(_ => Task.Run(shutdown.RequestCancellation, TestContext.Current.CancellationToken)));
+
+        results.Count(suppressed => suppressed).Should().Be(1);
+        cancellation.IsCancellationRequested.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task A_second_stop_signal_does_not_wait_for_stalled_request_draining()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var completion = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client = CreateClient((request, _) =>
+            request.RequestUri!.AbsolutePath == "/health"
+                ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK))
+                : completion.Task);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var shutdown = new GeneratorShutdown(cancellation);
+        var run = ScenarioRunner.RunConsoleAsync(
+            client, new(client.BaseAddress!, 30, 10), output, error, cancellation.Token, new FakeTimeProvider());
+
+        try
+        {
+            shutdown.RequestCancellation().Should().BeTrue();
+            run.IsCompleted.Should().BeFalse("the pending handler deliberately ignores cancellation");
+            shutdown.RequestCancellation().Should().BeFalse("another signal must permit immediate process termination");
+        }
+        finally
+        {
+            completion.TrySetCanceled(cancellation.Token);
+        }
+
+        (await run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).Should().Be(0);
+        error.ToString().Should().BeEmpty();
+    }
+
     private static async Task AdvanceUntilCompleteAsync(Task run, FakeTimeProvider time)
     {
         await AdvanceUntilAsync(() => run.IsCompleted, time);

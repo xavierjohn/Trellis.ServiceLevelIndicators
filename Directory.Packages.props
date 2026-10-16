@@ -34,6 +34,8 @@
     <PackageVersion Include="FluentAssertions" Version="7.2.2" />
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.13" />
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="7.1.1" />
+    <!-- FakeTimeProvider follows dotnet/extensions' independent 10.x release cadence,
+         not the runtime's 10.0.x servicing versions. -->
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.11.0" />
     <!-- Pin SqlClient's test-only cryptography dependency to a patched release. -->
     <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
