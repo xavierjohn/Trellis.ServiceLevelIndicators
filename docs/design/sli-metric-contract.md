@@ -314,11 +314,21 @@ The first overload retains replacement semantics; the second receives the built-
 
 HTTP classifier exceptions and undefined outcomes are logged and use the already-computed built-in status outcome; enrichment continues. Do not try a lower-priority classifier. This ambient HTTP failure boundary does not change explicit core action/result-selector propagation.
 
+Fallback can change the SLO population, not merely the diagnostic stream: custom-ignored `/health` may become `Success`, and a custom-client-error 429 may become `Failure`. Always emit classifier-failure event 3 with the fallback outcome, independently of warning-log filtering.
+
 ### Configuration and diagnostic failure boundaries
 
 Each indicator copies its supplied options and threshold collection. Effective options retain access to the instance's actual meter, while caller configuration remains unchanged. Reusing options without a supplied meter creates independently owned meters; supplied meters remain caller-owned. Later mutations of the original options do not update an existing indicator.
 
 Scope recording failures use `ILogger<ServiceLevelIndicator>` when available and EventSource provider `Trellis-ServiceLevelIndicators`, event 1 (`MeasurementRecordingFailed`). The original constructor remains supported without a logging dependency in application setup; DI can supply the logger through the additional constructor. All diagnostic logging is guarded. A broken logger emits event 2 (`DiagnosticLoggingFailed`) rather than changing HTTP behavior or masking a primary exception. No metric names, units, or dimensions are added by this policy.
+
+The provider is the public `ServiceLevelIndicatorEventSource.Log` contract. ASP uses this and public `MeasuredOperation.SetOutcome` validation, not core internals; compatible core upgrades remain possible without exact-version pins. Diagnostic helpers take arguments directly rather than captured delegates, so successful requests do not allocate error-reporting closures.
+
+Event 3 (`HttpOutcomeClassificationFailed`) includes `operation`, `defaultOutcome`, and `error`. Event 4 (`EnrichmentFailed`) includes `operation`, `enrichmentType`, and `error`. Both emit independently of `ILogger`; an enabled EventSource collector/listener is required to observe them.
+
+Every exception-text field is bounded to 2048 UTF-16 code units, including the truncation marker, without splitting surrogate pairs. This is not redaction: exception messages and stack traces may contain request data. Apply collection/access/retention controls. `ILogger` still receives the original exception under application policy.
+
+Provider failures can leave histogram observations without some corresponding threshold increments. Cross-instrument emission is not atomic, so histogram/counter reconciliation assumes recording succeeded; no retry or rollback hides a failed partial emission.
 
 ### API versioning
 

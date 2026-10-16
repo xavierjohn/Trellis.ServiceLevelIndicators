@@ -12,6 +12,7 @@ public sealed class ServiceLevelIndicatorHttpOptions
     /// Abort and escaping-exception handling take precedence.
     /// Used only when <see cref="ClassifyOutcomeWithDefault"/> is not set.
     /// Callback exceptions and undefined outcomes are logged and fall back to built-in status classification.
+    /// Fallback can change the SLO population and emits an EventSource diagnostic even when warning logs are filtered.
     /// </summary>
     public Func<HttpContext, SliOutcome>? ClassifyOutcome { get; set; }
 
@@ -21,6 +22,7 @@ public sealed class ServiceLevelIndicatorHttpOptions
     /// Takes precedence over <see cref="ClassifyOutcome"/> if both properties are set directly.
     /// The fluent registration overloads clear the other property, so the last registration wins.
     /// Callback exceptions and undefined outcomes are logged and fall back to built-in status classification.
+    /// Fallback can change the SLO population and emits an EventSource diagnostic even when warning logs are filtered.
     /// </summary>
     public Func<HttpContext, SliOutcome, SliOutcome>? ClassifyOutcomeWithDefault { get; set; }
 }

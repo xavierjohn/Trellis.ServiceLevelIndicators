@@ -272,7 +272,11 @@ Configuration is copied per instance, including thresholds, without modifying ca
 
 `MeasuredOperation.Dispose()` attempts recording once and reports errors rather than replacing an application result or exception. Invalid raw-list mutations drop the measurement; provider failures may leave partial data but are not retried. Public `Record`, `AddAttribute`, and `SetOutcome` inputs remain strictly validated, and action/result-selector errors still propagate.
 
+Histogram/threshold reconciliation assumes successful recording: a provider failure after histogram delivery can leave corresponding threshold counts behind.
+
 Recording warnings use `ILogger<ServiceLevelIndicator>` when available and EventSource provider `Trellis-ServiceLevelIndicators` (`MeasurementRecordingFailed`, event 1). A throwing diagnostic logger is isolated and reported through `DiagnosticLoggingFailed` (event 2).
+
+The provider is the public `ServiceLevelIndicatorEventSource.Log` contract, avoiding core/ASP internal coupling. Classifier fallback and enrichment failures emit events 3 and 4 independently of logging filters; enable EventSource collection to observe them. Exception-text fields are capped at 2048 UTF-16 code units, not redacted, and may still contain request data.
 
 ## ASP.NET Core Customizations
 
@@ -312,6 +316,8 @@ builder.Services.AddServiceLevelIndicator(options => options.LocationId = locati
 `IsCallerQuotaRejection` represents application-specific limiter metadata; capacity rejection should remain `Failure`. The original one-argument replacement classifier remains supported, and the last fluent registration wins. `HttpOutcomeClassifier.ClassifyStatusCode(int)` exposes the built-in mapping. Neither callback overrides abort or escaping-exception handling.
 
 HTTP callback exceptions or undefined outcomes are warning-logged and use the built-in status outcome, without trying a lower-priority callback. Enrichment continues and handler response/exception behavior is preserved, even if diagnostic logging throws. This differs from explicit core result selectors, whose errors still propagate.
+
+**Fallback changes the SLO population:** custom-ignored `/health` can become `Success`, and a custom-client-error 429 can become `Failure`. Monitor `HttpOutcomeClassificationFailed` (EventSource event 3), which includes the fallback outcome even when warning logs are filtered.
 
 - To add API versioning as a dimension use package `Trellis.ServiceLevelIndicators.Asp.ApiVersioning` and enrich the metrics with `AddApiVersion`.
 

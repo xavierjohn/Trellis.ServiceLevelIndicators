@@ -389,6 +389,8 @@ The application supplies `IsCallerQuotaRejection`: actor quotas may be client er
 
 Callback exceptions and undefined outcomes are warning-logged and use the built-in status outcome; no lower-priority callback is tried, and enrichment continues. HTTP classifier failures do not change response status or replace the handler's completion. Explicit core result-selector exceptions still propagate.
 
+Fallback changes the SLO population: custom-ignored `/health` may become `Success`, while a custom-client-error 429 may become `Failure`. Monitor `HttpOutcomeClassificationFailed` (EventSource event 3), including its fallback outcome, rather than relying only on warning logs.
+
 ### Cancellation-safe enrichment
 
 Ordinary `Enrich` and `EnrichAsync` callbacks remain skipped after request cancellation. An `IEnrichment<WebEnrichmentContext>` implementation may opt in with `EnrichOnCancellation => true` only for bounded, cancellation-safe metadata access without I/O. The canceled token is still passed, and skipping an unsafe enrichment does not prevent later safe enrichments. API-version enrichment opts in automatically; known route/resource metadata is also retained.
@@ -399,7 +401,13 @@ Public `Record(...)`, `AddAttribute(...)`, and `SetOutcome(...)` inputs remain s
 
 `MeasuredOperation.Dispose()` attempts recording once and reports recording errors without throwing them over the application's result or exception. Invalid legacy raw-attribute mutations drop the measurement. A failing metric provider may leave partial data; no retry or fabricated success is emitted.
 
+In particular, histogram and threshold counts can diverge if delivery fails after the histogram observation but before all corresponding threshold increments. Reconciliation assumes successful recording; updates are not atomic across instruments.
+
 Recording warnings use `ILogger<ServiceLevelIndicator>` when available and EventSource provider `Trellis-ServiceLevelIndicators`, event 1 (`MeasurementRecordingFailed`). DI supplies the logger when registered, while the original options-only constructor remains supported. Broken diagnostic loggers are isolated and reported by event 2 (`DiagnosticLoggingFailed`), including in middleware route-resolution, classifier, and enrichment logging.
+
+Classifier fallback (event 3, `HttpOutcomeClassificationFailed`) and enrichment failure (event 4, `EnrichmentFailed`) are emitted even with filtered/no-op logging. Enable EventSource collection to observe them. `ServiceLevelIndicatorEventSource.Log` is the public shared contract; ASP no longer depends on core internals or exact-version lockstep.
+
+Exception-text fields are capped at 2048 UTF-16 code units, not redacted. They may still include request data and stack traces, so apply collection/access/retention controls. `ILogger` retains the original exception and follows application logging policy.
 
 ## Cardinality Guidance
 

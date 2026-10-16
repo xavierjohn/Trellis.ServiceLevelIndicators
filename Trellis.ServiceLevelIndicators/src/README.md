@@ -168,7 +168,13 @@ Configuration is copied at construction, including the threshold list. Caller op
 
 `MeasuredOperation.Dispose()` attempts recording once, becomes terminal before emission, and does not throw recording failures over the application's result or exception. Invalid legacy `Attributes` list mutations drop the measurement and report a diagnostic. A metric-provider failure can leave partially emitted data; disposal never retries or fabricates a successful measurement.
 
+Histogram and threshold-counter totals can therefore diverge after a recording failure: a histogram observation may be delivered before a corresponding threshold increment fails. Reconciliation assumes successful recording, not atomic updates across instruments.
+
 Recording failures produce a warning through `ILogger<ServiceLevelIndicator>` when available and EventSource provider `Trellis-ServiceLevelIndicators` (event 1, `MeasurementRecordingFailed`). The existing constructor still works without logging services; an overload accepts `ILogger<ServiceLevelIndicator>`, and DI selects it when logging is registered. A throwing logger is isolated and reported through the same EventSource (event 2, `DiagnosticLoggingFailed`).
+
+The shared provider is the public `ServiceLevelIndicatorEventSource.Log` contract, not an assembly-friend dependency. HTTP classifier fallback (event 3, `HttpOutcomeClassificationFailed`) and enrichment errors (event 4, `EnrichmentFailed`) are observable independently of `ILogger` filtering when an EventSource collector/listener is enabled. Classifier events include the built-in outcome used instead.
+
+Each exception-text field is truncated to at most 2048 UTF-16 code units, including its truncation marker, without splitting surrogate pairs. This bounds payload size, not sensitive data: messages and stack traces can still contain request data. Apply appropriate collection/access/retention controls; `ILogger` receives the original exception under the application's logging policy.
 
 ## Key APIs
 
@@ -182,6 +188,7 @@ Recording failures produce a warning through `ILogger<ServiceLevelIndicator>` wh
 | `MeasuredOperation.CustomerResourceId` | Get/set the customer resource ID |
 | `ServiceLevelIndicator.CreateLocationId(cloud, region?, zone?)` | Helper to build a location ID string |
 | `ServiceLevelIndicator.CreateCustomerResourceId(guid)` | Helper to build a customer resource ID from a service tree GUID |
+| `ServiceLevelIndicatorEventSource.Log` | Public, shared instrumentation-failure diagnostic provider |
 
 ## Optional AgentDocs setup
 

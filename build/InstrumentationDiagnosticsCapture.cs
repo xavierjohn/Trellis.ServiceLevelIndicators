@@ -29,7 +29,7 @@ internal sealed class InstrumentationDiagnosticsCapture(string operation) : Even
 
 internal sealed record CapturedInstrumentationFailure(string Name, IReadOnlyDictionary<string, object?> Data);
 
-internal sealed class DiagnosticTestLogger<T>(string? throwFrom = null) : ILogger<T>
+internal sealed class DiagnosticTestLogger<T>(string? throwFrom = null, bool enabled = true) : ILogger<T>
 {
     public ConcurrentQueue<CapturedLog> Entries { get; } = [];
 
@@ -39,7 +39,7 @@ internal sealed class DiagnosticTestLogger<T>(string? throwFrom = null) : ILogge
     {
         if (throwFrom == nameof(IsEnabled))
             throw new InvalidOperationException("Broken logger: IsEnabled");
-        return true;
+        return enabled;
     }
 
     public void Log<TState>(

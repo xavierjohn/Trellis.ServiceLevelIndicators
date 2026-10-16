@@ -3,6 +3,7 @@
 using System.Diagnostics.Metrics;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 public sealed class InstrumentationHardeningTests
@@ -20,12 +21,17 @@ public sealed class InstrumentationHardeningTests
     [InlineData(true, false, 500, "Failure")]
     [InlineData(false, true, 500, "Failure")]
     [InlineData(true, true, 500, "Failure")]
+    [InlineData(false, false, 429, "Failure")]
+    [InlineData(true, false, 429, "Failure")]
+    [InlineData(false, true, 429, "Failure")]
+    [InlineData(true, true, 429, "Failure")]
     public async Task Classifier_faults_use_the_default_log_and_continue_enrichment(
         bool defaultAware, bool undefined, int statusCode, string expectedOutcome)
     {
         using var capture = new MetricCapture();
         using var sli = HttpOutcomePreviewTests.CreateSli(capture);
         var name = UniqueOperation();
+        using var diagnostics = new InstrumentationDiagnosticsCapture(name);
         var context = CreateContext(name, TestContext.Current.CancellationToken);
         context.Response.StatusCode = statusCode;
         var logger = new DiagnosticTestLogger<ServiceLevelIndicatorMiddleware>();
@@ -57,10 +63,84 @@ public sealed class InstrumentationHardeningTests
         capture.Measurements.Should().OnlyContain(measurement => Equals(measurement.Tags["Tier"], "standard"));
         var log = logger.Entries.Should().ContainSingle().Subject;
         log.Level.Should().Be(LogLevel.Warning);
+        log.Message.Should().Contain(expectedOutcome);
         if (undefined)
             log.Exception.Should().BeOfType<ArgumentOutOfRangeException>();
         else
             log.Exception.Should().BeSameAs(original);
+        var failure = diagnostics.Failures.Should().ContainSingle().Subject;
+        failure.Name.Should().Be("HttpOutcomeClassificationFailed");
+        failure.Data["defaultOutcome"].Should().Be(expectedOutcome);
+        failure.Data["error"].Should().BeOfType<string>().Which.Should()
+            .Contain(undefined ? nameof(ArgumentOutOfRangeException) : original.Message);
+    }
+
+    [Theory]
+    [InlineData(true, true, 200, "Success")]
+    [InlineData(false, true, 200, "Success")]
+    [InlineData(true, true, 429, "Failure")]
+    [InlineData(false, true, 429, "Failure")]
+    [InlineData(true, false, 202, "Success")]
+    [InlineData(false, false, 202, "Success")]
+    public async Task Classifier_and_enrichment_failures_are_observable_with_noop_or_filtered_logging(
+        bool nullLogger, bool classifierFailure, int statusCode, string expectedOutcome)
+    {
+        using var capture = new MetricCapture();
+        using var sli = HttpOutcomePreviewTests.CreateSli(capture);
+        var name = UniqueOperation();
+        using var diagnostics = new InstrumentationDiagnosticsCapture(name);
+        var context = CreateContext(name, TestContext.Current.CancellationToken);
+        context.Response.StatusCode = statusCode;
+        var filteredLogger = new DiagnosticTestLogger<ServiceLevelIndicatorMiddleware>(enabled: false);
+        ILogger<ServiceLevelIndicatorMiddleware> logger = nullLogger
+            ? NullLogger<ServiceLevelIndicatorMiddleware>.Instance
+            : filteredLogger;
+        var laterCalls = 0;
+        IEnrichment<WebEnrichmentContext>[] enrichments = classifierFailure
+            ? [new TestEnrichment(_ => laterCalls++)]
+            :
+            [
+                new TestEnrichment(_ => throw new InvalidOperationException("Enrichment failed")),
+                new TestEnrichment(_ => laterCalls++)
+            ];
+        var middleware = CreateMiddleware(_ => Task.CompletedTask, sli, logger,
+            classifierFailure
+                ? CreateOptions(false, _ => throw new InvalidOperationException("Classifier failed"))
+                : null,
+            enrichments);
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.StatusCode.Should().Be(statusCode);
+        laterCalls.Should().Be(1);
+        filteredLogger.Entries.Should().BeEmpty();
+        AssertOutcome(capture, expectedOutcome);
+        var failure = diagnostics.Failures.Should().ContainSingle().Subject;
+        failure.Name.Should().Be(classifierFailure ? "HttpOutcomeClassificationFailed" : "EnrichmentFailed");
+        if (classifierFailure)
+            failure.Data["defaultOutcome"].Should().Be(expectedOutcome);
+        else
+            failure.Data["enrichmentType"].Should().Be(nameof(TestEnrichment));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Healthy_classifiers_and_enrichments_emit_no_failure_diagnostics(bool defaultAware)
+    {
+        using var capture = new MetricCapture();
+        using var sli = HttpOutcomePreviewTests.CreateSli(capture);
+        var name = UniqueOperation();
+        using var diagnostics = new InstrumentationDiagnosticsCapture(name);
+        var middleware = CreateMiddleware(_ => Task.CompletedTask, sli,
+            NullLogger<ServiceLevelIndicatorMiddleware>.Instance,
+            CreateOptions(defaultAware, _ => SliOutcome.ClientError),
+            [new TestEnrichment(enrichment => enrichment.AddAttribute("Tier", "standard"))]);
+
+        await middleware.InvokeAsync(CreateContext(name, TestContext.Current.CancellationToken));
+
+        AssertOutcome(capture, "ClientError");
+        diagnostics.Failures.Should().BeEmpty();
     }
 
     [Fact]
@@ -140,8 +220,10 @@ public sealed class InstrumentationHardeningTests
         classifierCalls.Should().Be(0);
         context.TryGetMeasuredOperation(out _).Should().BeFalse();
         AssertOutcome(capture, aborted ? "Ignored" : "Failure");
-        var failure = diagnostics.Failures.Should().ContainSingle().Subject;
-        failure.Name.Should().Be("DiagnosticLoggingFailed");
+        diagnostics.Failures.Select(failure => failure.Name).Should()
+            .BeEquivalentTo("EnrichmentFailed", "DiagnosticLoggingFailed");
+        var failure = diagnostics.Failures.Should()
+            .ContainSingle(failure => failure.Name == "DiagnosticLoggingFailed").Subject;
         failure.Data["stage"].Should().Be("enrichment");
         failure.Data["originalError"].Should().BeOfType<string>().Which.Should().Contain("Enrichment failed");
         failure.Data["loggingError"].Should().BeOfType<string>().Which.Should().Contain("Broken logger");
@@ -183,7 +265,13 @@ public sealed class InstrumentationHardeningTests
         context.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
         context.TryGetMeasuredOperation(out _).Should().BeFalse();
         AssertOutcome(capture, "Success");
-        diagnostics.Failures.Should().ContainSingle().Which.Name.Should().Be("DiagnosticLoggingFailed");
+        string[] expectedDiagnostics = stage switch
+        {
+            "classification" => ["HttpOutcomeClassificationFailed", "DiagnosticLoggingFailed"],
+            "enrichment" => ["EnrichmentFailed", "DiagnosticLoggingFailed"],
+            _ => ["DiagnosticLoggingFailed"]
+        };
+        diagnostics.Failures.Select(failure => failure.Name).Should().BeEquivalentTo(expectedDiagnostics);
     }
 
     [Theory]

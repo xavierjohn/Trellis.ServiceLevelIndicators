@@ -16,7 +16,4 @@
       <PackageReference Include="Microsoft.Extensions.Options" />
       <PackageReference Include="OpenTelemetry" />
     </ItemGroup>
-    <ItemGroup>
-      <InternalsVisibleTo Include="Trellis.ServiceLevelIndicators.Asp" />
-    </ItemGroup>
 </Project>

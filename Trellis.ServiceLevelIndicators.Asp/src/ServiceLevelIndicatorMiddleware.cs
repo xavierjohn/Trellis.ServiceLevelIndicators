@@ -84,9 +84,7 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
                     }
                     catch (Exception ex)
                     {
-                        LogSafely(
-                            () => LogEnrichmentFailed(ex, enrichment.GetType().Name),
-                            measuredOperation.Operation, "enrichment", ex);
+                        ReportEnrichmentFailure(ex, enrichment.GetType().Name, measuredOperation.Operation);
                     }
                 }
             }
@@ -100,23 +98,50 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
     [LoggerMessage(Level = LogLevel.Warning, Message = "SLI enrichment {EnrichmentType} failed.")]
     partial void LogEnrichmentFailed(Exception ex, string enrichmentType);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "SLI HTTP outcome classifier failed; using the built-in status-code classification.")]
-    partial void LogClassifierFailed(Exception ex);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "SLI HTTP outcome classifier failed; using the built-in status-code classification {DefaultOutcome}.")]
+    partial void LogClassifierFailed(Exception ex, SliOutcome defaultOutcome);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "SLI middleware could not resolve a route template for endpoint {Endpoint}; emitting bounded sentinel '<unrouted>' to avoid metric cardinality explosion. Set [ServiceLevelIndicator(Operation = \"...\")] or use a routed endpoint to fix this.")]
     partial void LogMissingRouteTemplate(string endpoint);
 
-    private static void LogSafely(
-        Action log, string operation, string stage, Exception? originalException = null)
+    private void ReportEnrichmentFailure(Exception exception, string enrichmentType, string operation)
     {
+        ServiceLevelIndicatorEventSource.Log.ReportEnrichmentFailure(operation, enrichmentType, exception);
         try
         {
-            log();
+            LogEnrichmentFailed(exception, enrichmentType);
         }
         catch (Exception loggingException)
         {
             ServiceLevelIndicatorEventSource.Log.ReportLoggingFailure(
-                operation, stage, originalException, loggingException);
+                operation, "enrichment", exception, loggingException);
+        }
+    }
+
+    private void ReportClassifierFailure(Exception exception, SliOutcome defaultOutcome, string operation)
+    {
+        ServiceLevelIndicatorEventSource.Log.ReportClassifierFailure(operation, defaultOutcome, exception);
+        try
+        {
+            LogClassifierFailed(exception, defaultOutcome);
+        }
+        catch (Exception loggingException)
+        {
+            ServiceLevelIndicatorEventSource.Log.ReportLoggingFailure(
+                operation, "HTTP classification", exception, loggingException);
+        }
+    }
+
+    private void LogMissingRouteTemplateSafely(HttpContext context, string operation)
+    {
+        try
+        {
+            LogMissingRouteTemplate(context.GetEndpoint()?.DisplayName ?? "(no endpoint)");
+        }
+        catch (Exception loggingException)
+        {
+            ServiceLevelIndicatorEventSource.Log.ReportLoggingFailure(
+                operation, "route resolution", null, loggingException);
         }
     }
 
@@ -160,12 +185,13 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
                 outcome = _httpOptions.ClassifyOutcomeWithDefault?.Invoke(context, defaultOutcome)
                     ?? _httpOptions.ClassifyOutcome?.Invoke(context)
                     ?? defaultOutcome;
-                _ = ServiceLevelIndicator.ToWireValue(outcome);
+                measuredOperation.SetOutcome(outcome);
+                return;
             }
             catch (Exception ex)
             {
                 outcome = defaultOutcome;
-                LogSafely(() => LogClassifierFailed(ex), measuredOperation.Operation, "HTTP classification", ex);
+                ReportClassifierFailure(ex, defaultOutcome, measuredOperation.Operation);
             }
         }
 
@@ -197,9 +223,7 @@ internal sealed partial class ServiceLevelIndicatorMiddleware
         if (string.IsNullOrEmpty(template))
         {
             var operation = context.Request.Method.ToUpperInvariant() + " <unrouted>";
-            LogSafely(
-                () => LogMissingRouteTemplate(context.GetEndpoint()?.DisplayName ?? "(no endpoint)"),
-                operation, "route resolution");
+            LogMissingRouteTemplateSafely(context, operation);
             return operation;
         }
 

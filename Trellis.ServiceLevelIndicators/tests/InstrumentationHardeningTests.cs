@@ -347,6 +347,134 @@ public sealed class InstrumentationHardeningTests
             .Which.Data["error"].Should().Be(typeof(UnformattableException).FullName);
     }
 
+    [Theory]
+    [InlineData("recording", "MeasurementRecordingFailed")]
+    [InlineData("logging", "DiagnosticLoggingFailed")]
+    [InlineData("classifier", "HttpOutcomeClassificationFailed")]
+    [InlineData("enrichment", "EnrichmentFailed")]
+    public void Every_diagnostic_exception_field_is_bounded(string kind, string eventName)
+    {
+        var name = UniqueOperation();
+        using var diagnostics = new InstrumentationDiagnosticsCapture(name);
+        var exception = new DiagnosticTextException(new string('x', 4096));
+        var source = ServiceLevelIndicatorEventSource.Log;
+
+        switch (kind)
+        {
+            case "recording":
+                source.ReportRecordingFailure(name, exception);
+                break;
+            case "logging":
+                source.ReportLoggingFailure(name, "test", exception,
+                    new DiagnosticTextException(new string('y', 4096)));
+                break;
+            case "classifier":
+                source.ReportClassifierFailure(name, SliOutcome.Success, exception);
+                break;
+            case "enrichment":
+                source.ReportEnrichmentFailure(name, "TestEnrichment", exception);
+                break;
+            default:
+                throw new InvalidOperationException("Unexpected diagnostic kind");
+        }
+
+        var failure = diagnostics.Failures.Should().ContainSingle().Subject;
+        failure.Name.Should().Be(eventName);
+        var errorFields = failure.Data.Where(pair => pair.Key.EndsWith("error", StringComparison.OrdinalIgnoreCase)).ToArray();
+        errorFields.Should().HaveCount(kind == "logging" ? 2 : 1);
+        foreach (var field in errorFields)
+            field.Value.Should().BeOfType<string>().Which.Should().HaveLength(2048).And.EndWith("...");
+    }
+
+    [Fact]
+    public void A_provider_failure_after_the_histogram_can_leave_threshold_counts_behind_without_retrying()
+    {
+        using var meter = new Meter(UniqueOperation());
+        var name = UniqueOperation();
+        using var diagnostics = new InstrumentationDiagnosticsCapture(name);
+        var recorded = new List<string>();
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, meterListener) =>
+            {
+                if (ReferenceEquals(instrument.Meter, meter))
+                    meterListener.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((instrument, _, _, _) =>
+        {
+            if (instrument.Name == "operation.duration.threshold.count")
+                throw new InvalidOperationException("Threshold provider failed");
+            recorded.Add(instrument.Name);
+        });
+        listener.Start();
+        var options = new ServiceLevelIndicatorOptions
+        {
+            Meter = meter,
+            LocationId = "test-region",
+            CustomerResourceId = "tenant-a",
+            LatencyThresholds = { TimeSpan.FromDays(1) }
+        };
+        using var sli = new ServiceLevelIndicator(Options.Create(options));
+        var operation = sli.StartMeasuring(name);
+        operation.SetOutcome(SliOutcome.Success);
+
+        operation.Dispose();
+        operation.Dispose();
+
+        recorded.Should().ContainSingle().Which.Should().Be("operation.duration");
+        diagnostics.Failures.Should().ContainSingle().Which.Name.Should().Be("MeasurementRecordingFailed");
+    }
+
+    [Fact]
+    public void Truncation_does_not_split_a_surrogate_pair()
+    {
+        var name = UniqueOperation();
+        using var diagnostics = new InstrumentationDiagnosticsCapture(name);
+        var prefix = new string('x', 2044);
+        var exception = new DiagnosticTextException(prefix + "\uD83D\uDE00" + new string('y', 32));
+
+        ServiceLevelIndicatorEventSource.Log.ReportRecordingFailure(name, exception);
+
+        diagnostics.Failures.Should().ContainSingle().Which.Data["error"].Should().Be(prefix + "...");
+    }
+
+    [Theory]
+    [InlineData("recording")]
+    [InlineData("logging")]
+    [InlineData("classifier")]
+    [InlineData("enrichment")]
+    public void Public_diagnostic_helpers_reject_a_null_failure_exception(string kind)
+    {
+        var name = UniqueOperation();
+        using var diagnostics = new InstrumentationDiagnosticsCapture(name);
+        var source = ServiceLevelIndicatorEventSource.Log;
+        Action report = kind switch
+        {
+            "recording" => () => source.ReportRecordingFailure(name, null!),
+            "logging" => () => source.ReportLoggingFailure(name, "test", null, null!),
+            "classifier" => () => source.ReportClassifierFailure(name, SliOutcome.Success, null!),
+            "enrichment" => () => source.ReportEnrichmentFailure(name, "TestEnrichment", null!),
+            _ => throw new InvalidOperationException("Unexpected diagnostic kind")
+        };
+
+        report.Should().Throw<ArgumentNullException>();
+        diagnostics.Failures.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Public_classifier_diagnostics_reject_an_undefined_fallback_outcome()
+    {
+        var name = UniqueOperation();
+        using var diagnostics = new InstrumentationDiagnosticsCapture(name);
+
+        Action report = () => ServiceLevelIndicatorEventSource.Log.ReportClassifierFailure(
+            name, (SliOutcome)99, new InvalidOperationException("Classifier failed"));
+
+        report.Should().Throw<ArgumentOutOfRangeException>();
+        diagnostics.Failures.Should().BeEmpty();
+    }
+
     [Fact]
     public void A_throwing_diagnostic_observer_cannot_replace_the_application_exception()
     {
@@ -449,6 +577,11 @@ public sealed class InstrumentationHardeningTests
     private sealed class UnformattableException : Exception
     {
         public override string ToString() => throw new InvalidOperationException("Cannot format exception");
+    }
+
+    private sealed class DiagnosticTextException(string text) : Exception
+    {
+        public override string ToString() => text;
     }
 
     private sealed class ThrowingDiagnosticListener(string operation) : EventListener

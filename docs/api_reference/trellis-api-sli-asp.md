@@ -114,6 +114,8 @@ Neither callback runs on observed request aborts or escaping exceptions.
 
 Callback exceptions, including callback cancellation, and undefined outcomes are warning-logged and fall back to the already-computed built-in status outcome. The lower-priority callback is not tried; enrichment continues and the response is unchanged. Explicit core result-selector errors still propagate.
 
+Fallback changes the SLO population: custom-ignored `/health` can become `Success`, and custom-client-error 429 can become `Failure`. EventSource event 3 (`HttpOutcomeClassificationFailed`) includes `operation`, `defaultOutcome`, and `error`, even when warning logs are filtered or no-op.
+
 ### HttpOutcomeClassifier
 
 ```csharp
@@ -361,6 +363,10 @@ The `ServiceLevelIndicatorMiddleware` (registered by `UseServiceLevelIndicator()
 8. Removes the feature and disposes the `MeasuredOperation`, attempting recording once without propagating recording failures.
 
 All middleware diagnostic logging is guarded, including route-resolution warnings. A throwing logger is reported through EventSource provider `Trellis-ServiceLevelIndicators`, event 2 (`DiagnosticLoggingFailed`), without replacing handler exceptions or stopping later enrichments. The core reports recording failures through its logger and event 1 (`MeasurementRecordingFailed`); failed disposal is terminal, not retried.
+
+Classifier failures also emit event 3 (`HttpOutcomeClassificationFailed`); enrichment failures emit event 4 (`EnrichmentFailed`, fields `operation`, `enrichmentType`, `error`). These do not depend on logging configuration; enable EventSource collection to observe them. ASP uses the public `ServiceLevelIndicatorEventSource` and `MeasuredOperation.SetOutcome` contracts, not core internals, allowing compatible core upgrades without exact-version pins.
+
+Exception-text fields are bounded to 2048 UTF-16 code units, not redacted, and may contain request data. Provider failures can leave histogram observations without corresponding threshold increments; reconciliation is not guaranteed after a recording failure.
 
 Throws `InvalidOperationException` if a second instance of the middleware tries to attach an SLI feature to the same request.
 
