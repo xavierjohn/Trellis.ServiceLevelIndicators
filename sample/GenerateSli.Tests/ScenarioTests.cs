@@ -184,6 +184,7 @@ public sealed class ScenarioTests
         bool timeout, string countName, string diagnostic)
     {
         var requests = 0;
+        var time = new FakeTimeProvider();
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         using var client = CreateClient(request =>
         {
@@ -191,6 +192,7 @@ public sealed class ScenarioTests
                 return new(HttpStatusCode.OK);
 
             Interlocked.Increment(ref requests);
+            time.Advance(TimeSpan.FromMilliseconds(100));
             if (timeout)
                 throw new TaskCanceledException("Simulated request timeout.");
 
@@ -198,11 +200,10 @@ public sealed class ScenarioTests
         });
         using var output = new CycleCancellingWriter(cancellation, "Cycle 2");
         using var error = new StringWriter();
-        var time = new FakeTimeProvider();
-        var run = ScenarioRunner.RunAsync(
+
+        var act = () => ScenarioRunner.RunAsync(
             client, new(client.BaseAddress!, 1, 1_000, Continuous: true), output, error, cancellation.Token, time);
 
-        var act = () => AdvanceUntilCompleteAsync(run, time);
         await act.Should().ThrowAsync<OperationCanceledException>();
 
         var diagnostics = error.ToString().Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
@@ -212,7 +213,7 @@ public sealed class ScenarioTests
         summaries.Should().HaveCount(5);
         summaries.Sum(match => int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture))
             .Should().Be(requests);
-        requests.Should().BeGreaterThan(5);
+        requests.Should().Be(50, "each of five phases contains ten failures with 100 ms of simulated send overhead");
     }
 
     [Theory]
