@@ -1,9 +1,9 @@
 ---
 package: Trellis.ServiceLevelIndicators
 namespaces: [Trellis.ServiceLevelIndicators]
-types: [ServiceLevelIndicator, ServiceLevelIndicatorOptions, MeasuredOperation, IEnrichmentContext, "IEnrichment<T>", ServiceLevelIndicatorMeterProviderBuilderExtensions]
+types: [ServiceLevelIndicator, ServiceLevelIndicatorOptions, SliOutcome, MeasuredOperation, ServiceLevelIndicatorEventSource, IServiceLevelIndicatorBuilder, ServiceLevelIndicatorCoreServiceCollectionExtensions, IEnrichmentContext, "IEnrichment<T>", ServiceLevelIndicatorMeterProviderBuilderExtensions]
 version: v10
-last_verified: 2026-10-15
+last_verified: 2026-10-16
 audience: [llm]
 ---
 
@@ -45,6 +45,8 @@ Configure `options.LatencyThresholds.Add(TimeSpan.FromSeconds(2))` during startu
 
 The duration histogram keeps its original tags and unit. Both instruments use the configured meter; no threshold instrument is created when the collection is empty. Generated threshold-tag names are also rejected on direct `MeasuredOperation.Attributes` mutation.
 
+Thresholds classify recorded duration; they do not enforce timeouts, cancel work, or change an operation's outcome.
+
 Timing is independent of outcome: a fast failure is `within` but not successful-and-fast. Select one threshold and an explicit eligibility policy for each ratio. No eligible traffic is no data; eligible traffic with zero good events is 0. The counter supports configured boundaries, not arbitrary percentiles.
 
 For a fixed meter/resource scope, `N` thresholds and `P` projected base-tag combinations add at most `2 * N * P` series; `P` includes outcome and retained optional/custom dimensions. Backend resource/instance dimensions may multiply this further. On Azure Monitor's delta-export path, sum each interval's `AppMetrics.Sum` increment over the window, not rows, `ItemCount`, latest/max, or cumulative differences. Prometheus cumulative scrapes need `increase`/`rate`.
@@ -72,6 +74,7 @@ Configuration is copied at construction, including the threshold list, without m
 | Name | Type | Value | Description |
 |---|---|---|---|
 | `DefaultMeterName` | `const string` | `"Trellis.SLI"` | Default meter name used when no `Meter` is supplied in options. |
+| `UnknownCustomerResourceId` | `const string` | `"Unknown"` | Fallback when the target resource has not been configured or resolved. |
 
 **Properties**
 
@@ -159,6 +162,22 @@ Registers `ServiceLevelIndicator` as a singleton and configures `ServiceLevelInd
 
 ---
 
+### SliOutcome
+
+```csharp
+public enum SliOutcome
+{
+    Success,
+    Failure,
+    ClientError,
+    Ignored
+}
+```
+
+Metrics use these exact, case-sensitive names. Default availability includes `Success` and `Failure`; `ClientError` and `Ignored` are excluded. Timing thresholds are independent of outcome. Raw scopes explicitly initialize their outcome to `Ignored`, not the enum's zero value.
+
+---
+
 ### MeasuredOperation
 
 **Declaration**
@@ -181,15 +200,15 @@ Represents an in-flight measurement. The stopwatch starts in the constructor; di
 
 | Signature | Description |
 |---|---|
-| `public MeasuredOperation(ServiceLevelIndicator sli, string operation, params KeyValuePair<string, object?>[] attributes)` | Uses the default `CustomerResourceId` from the indicator's options. |
-| `public MeasuredOperation(ServiceLevelIndicator sli, string operation, string customerResourceId, params KeyValuePair<string, object?>[] attributes)` | Uses an explicit `CustomerResourceId`. |
+| `public MeasuredOperation(ServiceLevelIndicator serviceLevelIndicator, string operation, params KeyValuePair<string, object?>[] attributes)` | Uses the default `CustomerResourceId` from the indicator's options. |
+| `public MeasuredOperation(ServiceLevelIndicator serviceLevelIndicator, string operation, string customerResourceId, params KeyValuePair<string, object?>[] attributes)` | Uses an explicit `CustomerResourceId`. |
 
 **Methods**
 
 | Signature | Returns | Description |
 |---|---|---|
 | `public void SetOutcome(SliOutcome outcome)` | `void` | Sets the SLI outcome recorded with the measurement. Default is `Ignored`. Throws immediately for an undefined outcome without changing the previous outcome. |
-| `public void SetActivityStatusCode(ActivityStatusCode code)` | `void` | Obsolete compatibility shim that maps `Ok` to `Success`, `Error` to `Failure`, and other values to `Ignored`. |
+| `public void SetActivityStatusCode(ActivityStatusCode activityStatusCode)` | `void` | Obsolete compatibility shim that maps `Ok` to `Success`, `Error` to `Failure`, and other values to `Ignored`. |
 | `public void AddAttribute(string attribute, object? value)` | `void` | Appends a custom attribute to be emitted with the measurement. Throws if the name collides with a reserved SLI tag. |
 | `public void Dispose()` | `void` | Stops the stopwatch and attempts recording once. Terminal even if recording fails; reports recording errors instead of throwing them or retrying. |
 | `protected virtual void Dispose(bool disposing)` | `void` | Standard dispose pattern hook. |
@@ -238,7 +257,7 @@ Helpers reject null failure exceptions and guard exception formatting. The corre
 public interface IEnrichmentContext
 ```
 
-Marker contract implemented by enrichment contexts (e.g. `WebEnrichmentContext` in the ASP package). Lets enrichments add attributes and override the customer id without coupling to a specific host.
+Host-neutral contract implemented by enrichment contexts (e.g. `WebEnrichmentContext` in the ASP package). Lets enrichments add attributes and override the target resource without coupling to a specific host.
 
 **Properties**
 
@@ -302,7 +321,18 @@ Helpers for wiring the SLI meter into an OpenTelemetry pipeline.
 
 ## Typical usage
 
+For a hosted OTLP pipeline, install:
+
+```shell
+dotnet add package Trellis.ServiceLevelIndicators --prerelease
+dotnet add package OpenTelemetry.Extensions.Hosting
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
+```
+
+These fragments assume an existing host `builder`. The simulated work uses `Task.Delay`; replace it with the application's work.
+
 ```csharp
+using OpenTelemetry.Metrics;
 using Trellis.ServiceLevelIndicators;
 
 builder.Services.AddOpenTelemetry()
@@ -313,21 +343,12 @@ builder.Services.AddOpenTelemetry()
 builder.Services.AddServiceLevelIndicator(o =>
 {
     o.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
+    o.CustomerResourceId = "project-blue";
 });
 
 // In a worker / job:
-async Task DoWorkAsync(ServiceLevelIndicator sli, CancellationToken ct)
-{
-    using var op = sli.StartMeasuring("ProcessBatch");
-    try
-    {
-        await ProcessAsync(ct);
-        op.SetOutcome(SliOutcome.Success);
-    }
-    catch
-    {
-        op.SetOutcome(SliOutcome.Failure);
-        throw;
-    }
-}
+Task DoWorkAsync(ServiceLevelIndicator sli, CancellationToken ct) =>
+    sli.MeasureAsync("SyncProject", () => Task.Delay(75, ct));
 ```
+
+`MeasureAsync` records `Success` on completion, `Failure` on exceptions, and `Ignored` for `OperationCanceledException`; exceptions still propagate. Raw scopes cannot detect escaping exceptions and must classify every path explicitly.

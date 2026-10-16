@@ -2,12 +2,12 @@
   "profiles": {
     "SampleVersionedWebApplicationSLI": {
       "commandName": "Project",
-      "launchBrowser": true,
+      "launchBrowser": false,
       "launchUrl": "scalar",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       },
-      "applicationUrl": "https://localhost:63936;http://localhost:63937"
+      "applicationUrl": "http://localhost:5202"
     }
   }
 }

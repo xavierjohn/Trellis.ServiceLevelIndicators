@@ -1,17 +1,12 @@
-@HostAddress = https://localhost:63936
+@HostAddress = http://localhost:5202
 
-### Hello World (default version)
-GET {{HostAddress}}/hello-world
+### Same operation and target, version 1.0
+GET {{HostAddress}}/projects/project-blue?api-version=1.0
 Accept: application/json
 
-### Hello World with specific API version
-GET {{HostAddress}}/hello-world?api-version=2023-08-06
+### Same operation and target, version 2.0
+GET {{HostAddress}}/projects/project-blue?api-version=2.0
 Accept: application/json
 
-### Hello World with name (customer resource id)
-GET {{HostAddress}}/hello-world/Xavier
-Accept: application/json
-
-### Hello World with name and specific API version
-GET {{HostAddress}}/hello-world/Xavier?api-version=2023-08-06
-Accept: application/json
+### Health is not measured
+GET {{HostAddress}}/health

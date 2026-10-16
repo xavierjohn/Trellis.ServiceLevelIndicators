@@ -3,7 +3,7 @@ package: Trellis.ServiceLevelIndicators.Asp
 namespaces: [Trellis.ServiceLevelIndicators]
 types: [IServiceLevelIndicatorBuilder, ServiceLevelIndicatorCoreServiceCollectionExtensions, ServiceLevelIndicatorServiceCollectionExtensions, ServiceLevelIndicatorHttpOptions, HttpOutcomeClassifier, ServiceLevelIndicatorApplicationBuilderExtensions, EndpointBuilderExtensions, ServiceLevelIndicatorAttribute, ExcludeFromServiceLevelIndicatorAttribute, CustomerResourceIdAttribute, MeasureAttribute, CustomerResourceIdMetadata, MeasureMetadata, WebEnrichmentContext, IServiceLevelIndicatorFeature, HttpContextExtensions]
 version: v10
-last_verified: 2026-10-15
+last_verified: 2026-10-16
 audience: [llm]
 ---
 
@@ -11,7 +11,7 @@ audience: [llm]
 
 **Package:** `Trellis.ServiceLevelIndicators.Asp`  
 **Namespace:** `Trellis.ServiceLevelIndicators`  
-**Purpose:** ASP.NET Core integration for `Trellis.ServiceLevelIndicators`. Provides middleware that automatically emits SLI latency metrics for eligible routed requests, endpoint exclusions, MVC and Minimal API attribute conventions for tagging the customer resource id and additional measured route values, and an enrichment pipeline for adding custom attributes (e.g. HTTP method, API version).
+**Purpose:** ASP.NET Core integration for `Trellis.ServiceLevelIndicators`. Provides middleware that automatically emits SLI latency metrics for eligible routed requests, endpoint exclusions, MVC and Minimal API attribute conventions for tagging the target resource and bounded route values, and an enrichment pipeline for additional service dimensions. HTTP method is emitted by default.
 
 For API-versioning-specific enrichment, see the `Trellis.ServiceLevelIndicators.Asp.ApiVersioning` reference, when installed.
 
@@ -25,7 +25,7 @@ When the middleware is registered, every measured request emits these tags on to
 
 | Tag | Source |
 |---|---|
-| `Operation` | HTTP method plus route template (e.g. `GET WeatherForecast` or `GET /teams/{teamId}`) — derived from `ControllerActionDescriptor.AttributeRouteInfo.Template` for MVC, or from the route pattern for Minimal APIs. Overridable via `[ServiceLevelIndicator(operation)]` or `AddServiceLevelIndicator("operation")`. |
+| `Operation` | HTTP method plus route template (e.g. `GET /projects/{projectId}`) — derived from `ControllerActionDescriptor.AttributeRouteInfo.Template` for MVC, or from the route pattern for Minimal APIs. Overridable via `[ServiceLevelIndicator(operation)]` or `AddServiceLevelIndicator("operation")`. |
 | `Outcome` | `Success` for 2xx/3xx, `ClientError` for 400/401/403/404/409/412/422, `Failure` for 429/5xx and escaping exceptions without an abort. Observed request aborts take precedence and are `Ignored`. |
 | `http.response.status.code` | `HttpContext.Response.StatusCode`; omitted on abort before headers start, otherwise retained. |
 | `http.request.method` | `HttpContext.Request.Method`; emitted by default. |
@@ -169,6 +169,8 @@ Endpoint and route-group integration.
 | `public static TBuilder AddServiceLevelIndicator<TBuilder>(this TBuilder builder, string? operation = default) where TBuilder : notnull, IEndpointConventionBuilder` | `TBuilder` | Marks a Minimal API endpoint for SLI emission. Scans the handler delegate's parameters for `[CustomerResourceId]` and `[Measure]` and projects them into endpoint metadata. When `operation` is `null`, the route template is used. |
 | `public static TBuilder ExcludeFromServiceLevelIndicator<TBuilder>(this TBuilder builder) where TBuilder : notnull, IEndpointConventionBuilder` | `TBuilder` | Excludes an endpoint, health-check mapping, or route group. Returns the original builder type for chaining; throws for a null builder. |
 
+Register SLI once for each endpoint: either on its route group or on the handler. Applying `AddServiceLevelIndicator()` to both re-scans the same parameters and can fail with duplicate customer-resource metadata.
+
 ---
 
 ### ServiceLevelIndicatorAttribute
@@ -298,6 +300,8 @@ public class WebEnrichmentContext : IEnrichmentContext
 
 Concrete enrichment context for ASP.NET Core. Passed to every registered `IEnrichment<WebEnrichmentContext>` after the response status code is known but before the metric is recorded.
 
+**Constructor:** `public WebEnrichmentContext(MeasuredOperation operation, HttpContext httpContext)`.
+
 **Properties**
 
 | Name | Type | Description |
@@ -311,6 +315,8 @@ Concrete enrichment context for ASP.NET Core. Passed to every registered `IEnric
 |---|---|---|
 | `public void AddAttribute(string name, object? value)` | `void` | Append an attribute to the in-flight measurement. |
 | `public void SetCustomerResourceId(string id)` | `void` | Override the customer resource id for this measurement. |
+
+Enrichments run after endpoint handling and may overwrite the resource extracted from route metadata. Supply the resolved target, not the caller's tenant unless same-tenant semantics are guaranteed. Map custom dimensions to bounded categories; do not emit caller identities or arbitrary request values.
 
 ---
 
@@ -378,42 +384,58 @@ Genuine unmatched routes are not measured. Abort-first availability can miss slo
 
 ## Typical usage (MVC)
 
+Install the SLI integration and the separate hosting/exporter dependencies:
+
+```shell
+dotnet add package Trellis.ServiceLevelIndicators.Asp --prerelease
+dotnet add package OpenTelemetry.Extensions.Hosting
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
+```
+
+Within an existing ASP.NET Core `builder`:
+
 ```csharp
+using Microsoft.AspNetCore.Mvc;
+using OpenTelemetry.Metrics;
 using Trellis.ServiceLevelIndicators;
 
+builder.Services.AddControllers();
 builder.Services.AddOpenTelemetry()
     .WithMetrics(m => m.AddServiceLevelIndicatorInstrumentation().AddOtlpExporter());
 
 builder.Services.AddServiceLevelIndicator(o =>
 {
     o.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
-    // Automatic emission is enabled by default. Set AutomaticallyEmitted = false
-    // to opt in endpoint-by-endpoint with AddServiceLevelIndicator().
+    o.AutomaticallyEmitted = false;
 })
 .AddMvc();
 
 var app = builder.Build();
 app.UseRouting();
 app.UseServiceLevelIndicator();
+app.MapControllers();
+app.Run();
 ```
 
 ```csharp
 [ApiController]
-[Route("subscriptions/{subscriptionId}/widgets")]
-public class WidgetsController : ControllerBase
+[Route("projects/{projectId:regex(^project-(blue|green|red)$)}")]
+[ServiceLevelIndicator(Operation = "SyncProject")]
+public sealed class ProjectsController : ControllerBase
 {
-    [HttpGet("{widgetId}")]
-    public IActionResult Get(
-        [CustomerResourceId] Guid subscriptionId,
-        [Measure("widget.id")] Guid widgetId) => Ok();
+    [HttpPost("sync/{mode:regex(^(quick|standard|slow)$)}")]
+    public IActionResult Sync(
+        [CustomerResourceId] string projectId,
+        [Measure("SyncMode")] string mode) => Ok();
 }
 ```
 
 ## Typical usage (Minimal API)
 
 ```csharp
-// Required only when AutomaticallyEmitted = false.
-app.MapGet("/subs/{subscriptionId}/widgets/{widgetId}",
-    ([CustomerResourceId] Guid subscriptionId, [Measure("widget.id")] Guid widgetId) => Results.Ok())
-   .AddServiceLevelIndicator();
+app.MapPost("/projects/{projectId:regex(^project-(blue|green|red)$)}/sync/{mode:regex(^(quick|standard|slow)$)}",
+    ([CustomerResourceId] string projectId, [Measure("SyncMode")] string mode) => Results.Ok())
+   .AddServiceLevelIndicator("SyncProject");
 ```
+
+Use the same telemetry and SLI registration, but omit controller registration and `.AddMvc()` for a Minimal API-only app. Map endpoints before `app.Run()`. With `AutomaticallyEmitted = false`, only explicitly included endpoints emit automatic SLI metrics. The example constrains both target resources and mode values instead of measuring arbitrary widget IDs.

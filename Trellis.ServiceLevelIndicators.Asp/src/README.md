@@ -15,8 +15,12 @@ Use [Trellis.ServiceLevelIndicators](https://www.nuget.org/packages/Trellis.Serv
 ## Installation
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators.Asp
+dotnet add package Trellis.ServiceLevelIndicators.Asp --prerelease
+dotnet add package OpenTelemetry.Extensions.Hosting
+dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
 ```
+
+The OpenTelemetry hosting and OTLP exporter extensions are separate dependencies. Import `OpenTelemetry.Metrics` and `Trellis.ServiceLevelIndicators`. The repository README includes a complete copyable Minimal API setup.
 
 ## Quick Start — MVC Controllers
 
@@ -60,6 +64,8 @@ app.MapGet("/hello", () => "Hello World!")
 
 If you configure a custom `Meter` in `ServiceLevelIndicatorOptions`, register that same meter with OpenTelemetry by calling `AddServiceLevelIndicatorInstrumentation(meter)`.
 
+Register `AddServiceLevelIndicator()` once per Minimal API endpoint, either on its group or on the handler. Applying it to both can duplicate parameter metadata and fail endpoint initialization.
+
 `ServiceLevelIndicator` is a sealed `IDisposable` registered as a singleton; the DI container disposes it (and the `Meter` it created) at host shutdown — no manual cleanup needed. A `Meter` you supply via `Options.Meter` is owned by you and is never disposed by SLI.
 
 Place `UseServiceLevelIndicator()` after routing and before endpoint execution so the middleware can read endpoint metadata and measure request handling.
@@ -91,6 +97,8 @@ The middleware measures routed endpoints, not genuine route misses. Matched endp
 
 Configure `options.LatencyThresholds.Add(TimeSpan.FromSeconds(2))` to enable `operation.duration.threshold.count` (`Counter<long>`, unit `{operation}`) on the same meter. Each measured request contributes once per configured threshold, with `sli.latency.threshold_ms` and `sli.latency.result = within | exceeded`; equality is within. Distinct positive whole-millisecond values are validated and snapshotted at construction; the default is disabled.
 
+Thresholds classify recorded duration; they do not enforce request timeouts, cancel work, or alter HTTP status/outcome.
+
 The counter retains SLI, API-version, abort, and custom dimensions, but excludes HTTP status, HTTP method, and `sli.request.abort_exception`. The duration histogram is unchanged. A fast failure is not a good event merely because its timing result is `within`.
 
 Abort-first availability can miss slow dependency outages when callers disconnect before the server fails. Pair availability with a successful-and-fast latency objective that includes slow aborts. The abort diagnostic helps investigation but is not a reliable standalone outage detector. Use the repository's usage reference for the full policy and Azure delta-counter query.
@@ -102,7 +110,7 @@ Abort-first availability can miss slow dependency outages when callers disconnec
 For `GET /teams/{teamId}` made by user `xa1` for team `team1`:
 
 - ✅ `CustomerResourceId = "team1"` (the resource being acted on)
-- ❌ NOT `"xa1"` — that's the *caller*; put it in `AddAttribute("CallerTier", ...)` or your audit log
+- ❌ NOT `"xa1"` — that's the *caller*; keep identities in audit logs/traces, not metric dimensions
 - ❌ NOT a fresh `Guid.NewGuid()` per request — that explodes metric cardinality
 - ❌ NOT the raw path `"/teams/team1"` — already covered by `Operation`
 
@@ -120,7 +128,7 @@ app.MapGet("/teams/{teamId}",
    .AddServiceLevelIndicator("GetTeam");
 ```
 
-Or set it imperatively from claims/headers via `Enrich` or `HttpContext.GetMeasuredOperation()` — but the value must still be stable and meaningful.
+Or set it imperatively from resolved target metadata via `Enrich` or `HttpContext.GetMeasuredOperation()`. A caller's tenant claim is only a valid target when the application guarantees same-tenant operations; cross-tenant callers must not replace the actual target.
 
 ### How `Operation` is resolved
 
@@ -196,25 +204,27 @@ ASP uses the public `ServiceLevelIndicatorEventSource` contract and public outco
 
 ### Enrich with custom data
 
-Use `Enrich` (or `EnrichAsync`) to set `CustomerResourceId` from a stable identifier on the request (a tenant/subscription claim, a header, etc.) or to add custom attributes. **Do not use the caller's identity (UPN, user ID) as `CustomerResourceId`** — that's the caller, not the resource being acted on. See [What `CustomerResourceId` is — and what it is NOT](#what-customerresourceid-is--and-what-it-is-not).
+`Enrich` receives a `WebEnrichmentContext` exposing `HttpContext`, `SetCustomerResourceId`, and `AddAttribute`. `EnrichAsync` receives that context and a cancellation token and returns `ValueTask`. Add bounded dimensions without replacing the target resource:
 
 ```csharp
 builder.Services.AddServiceLevelIndicator(options => { /* ... */ })
     .AddMvc()
     .Enrich(context =>
     {
-        var tenantId = context.HttpContext.User.Claims
-            .FirstOrDefault(c => c.Type == "tid")?.Value ?? "unknown";
-        context.SetCustomerResourceId(tenantId);
-
-        // Caller identity belongs in a separate (still bounded) dimension, never in CustomerResourceId.
-        var tier = context.HttpContext.User.Claims
-            .FirstOrDefault(c => c.Type == "tier")?.Value ?? "free";
+        var tier = context.HttpContext.User.FindFirst("tier")?.Value switch
+        {
+            "free" => "free",
+            "standard" => "standard",
+            "premium" => "premium",
+            _ => "unknown"
+        };
         context.AddAttribute("CallerTier", tier);
     });
 ```
 
-    `Enrich` and `EnrichAsync` delegates are skipped once request cancellation is observed. To preserve already-resolved metadata on aborts, implement `IEnrichment<WebEnrichmentContext>` with `EnrichOnCancellation => true` and register it in DI. Only opt in for bounded, cancellation-safe metadata access without I/O; the canceled token is still passed. Skipped enrichments do not prevent later cancellation-safe enrichments from running. The API-version package already opts in.
+Enrichment runs after endpoint handling and can overwrite a resource already extracted from route metadata. Only call `SetCustomerResourceId` with the resolved target, not the caller's tenant unless same-tenant semantics are guaranteed. See [What `CustomerResourceId` is — and what it is NOT](#what-customerresourceid-is--and-what-it-is-not).
+
+`Enrich` and `EnrichAsync` delegates are skipped once request cancellation is observed. To preserve already-resolved metadata on aborts, implement `IEnrichment<WebEnrichmentContext>` with `EnrichOnCancellation => true` and register it in DI. Only opt in for bounded, cancellation-safe metadata access without I/O; the canceled token is still passed. Skipped enrichments do not prevent later cancellation-safe enrichments from running. The API-version package already opts in.
 
 ### Override the operation name
 
@@ -242,10 +252,13 @@ HttpContext.GetMeasuredOperation().CustomerResourceId = customerResourceId;
 Parameters decorated with `[Measure]` are automatically added as metric dimensions:
 
 ```csharp
-[HttpGet("name/{first}/{teamId}")]
-public IActionResult Get([Measure] string first, [CustomerResourceId] string teamId) => Ok();
+[HttpPost("projects/{projectId}/sync/{mode:regex(^(quick|standard|slow)$)}")]
+public IActionResult Sync(
+    [CustomerResourceId] string projectId,
+    [Measure("SyncMode")] string mode) => Ok();
 ```
 
+Use stable target identifiers and bounded categories such as these three sync modes, not personal names or arbitrary text.
 ### Add custom attributes manually
 
 ```csharp
@@ -299,5 +312,5 @@ agent opens it when its task concerns SLI metrics. After a package upgrade, run
 
 ## Further Reading
 
-- [Full documentation and samples](https://github.com/xavierjohn/ServiceLevelIndicators)
-- [Package selection and usage reference](https://github.com/xavierjohn/ServiceLevelIndicators/blob/main/docs/usage-reference.md)
+- [Full documentation and samples](https://github.com/xavierjohn/Trellis.ServiceLevelIndicators)
+- [Package selection and usage reference](https://github.com/xavierjohn/Trellis.ServiceLevelIndicators/blob/main/docs/usage-reference.md)

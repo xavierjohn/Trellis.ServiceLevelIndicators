@@ -6,6 +6,8 @@ Implemented in the pre-1.0 metric contract finalization.
 
 The first-preview additions for TFR-26/27/29 shipped in `10.0.0-preview.37` and completed consumer acceptance. TFR-28 result selectors and TFR-30 endpoint exclusion are implemented in the source tree but are not part of preview.37.
 
+This is a design record, not the getting-started guide. The metric and instrumentation-failure contracts below are implemented; the Results adapter, analyzers, testing package, and bucket helper remain future work. Use the [live demo](../../README.md#try-the-live-demo) and [integration reference](../usage-reference.md) for current setup and runnable examples.
+
 ## Context
 
 `Trellis.ServiceLevelIndicators` is part of the Trellis AI-first .NET framework. Its role is to provide structural observability guardrails for generated and hand-written services by emitting service-level latency metrics with stable, meaningful dimensions.
@@ -41,6 +43,8 @@ The primary metric remains:
 `ServiceLevelIndicatorOptions.LatencyThresholds` enables `operation.duration.threshold.count` (`Counter<long>`, unit `{operation}`), with no thresholds enabled by default. Positive, distinct, whole-millisecond values are validated and snapshotted before instrument creation.
 
 Each operation increments once per threshold, tagged with integer `sli.latency.threshold_ms` and `sli.latency.result = within | exceeded`; equality with the recorded millisecond duration is within. All recording paths share the central emission logic. Timing is independent of outcome.
+
+Threshold configuration classifies recorded durations only; it does not impose a deadline, cancel work, or change HTTP status/outcome.
 
 The counter retains required dimensions, API version, the abort indicator, and custom dimensions when present. It omits `http.response.status.code`, `http.request.method`, and `sli.request.abort_exception`. It does not add threshold tags to the duration histogram.
 

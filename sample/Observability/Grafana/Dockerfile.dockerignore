@@ -1,0 +1,17 @@
+.git
+.github
+.worktrees
+**/.worktrees
+.vs
+**/bin
+**/obj
+**/TestResults
+**/artifacts
+**/*.user
+**/*.nupkg
+**/*.snupkg
+docs/**
+!docs/api_reference
+docs/api_reference/**
+!docs/api_reference/trellis-api-sli.md
+!docs/api_reference/trellis-api-sli-asp.md

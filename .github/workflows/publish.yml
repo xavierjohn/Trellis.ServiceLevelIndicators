@@ -83,7 +83,7 @@ jobs:
           -pn 'Trellis.ServiceLevelIndicators' `
           -pv $packageVersion `
           -ps 'Xavier John' `
-          -nsb 'https://github.com/xavierjohn/ServiceLevelIndicators/sbom' `
+          -nsb 'https://github.com/xavierjohn/Trellis.ServiceLevelIndicators/sbom' `
           -m $sbomDirectory `
           -mi SPDX:3.0 `
           -D true `

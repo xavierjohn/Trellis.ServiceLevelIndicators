@@ -1,5 +1,4 @@
 ﻿using Asp.Versioning;
-using Azure.Core;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using Scalar.AspNetCore;
@@ -7,36 +6,33 @@ using Trellis.ServiceLevelIndicators;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-
 builder.Services.AddControllers();
 builder.Services.AddApiVersioning(options => options.ApiVersionReader = new QueryStringApiVersionReader())
         .AddMvc()
-        .AddApiExplorer()
+        .AddApiExplorer(options => options.GroupNameFormat = "'v'VVV")
         .AddOpenApi(options => options.Document.AddScalarTransformers());
 
 builder.Services.AddProblemDetails();
 
-Action<ResourceBuilder> configureResource = r => r.AddService(
-    serviceName: "SampleVersionedWebApplicationSLI",
-    serviceVersion: typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown");
 builder.Services.AddOpenTelemetry()
-    .ConfigureResource(configureResource)
-    .WithMetrics(builder =>
+    .ConfigureResource(resource => resource.AddService("SampleVersionedWebApplicationSLI"))
+    .WithMetrics(metrics =>
     {
-        builder.AddServiceLevelIndicatorInstrumentation();
-        builder.AddOtlpExporter();
+        metrics.AddServiceLevelIndicatorInstrumentation();
+        metrics.AddOtlpExporter();
     });
 
 builder.Services.AddServiceLevelIndicator(options =>
 {
-    options.CustomerResourceId = "SampleVersionedApiResource";
-    options.LocationId = ServiceLevelIndicator.CreateLocationId("public", AzureLocation.WestUS3.Name);
+    options.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
+    options.AutomaticallyEmitted = false;
+    options.LatencyThresholds.Add(TimeSpan.FromMilliseconds(250));
 })
 .AddMvc()
 .AddApiVersion();
 
 var app = builder.Build();
+app.UseServiceLevelIndicator();
 
 if (app.Environment.IsDevelopment())
 {
@@ -53,17 +49,11 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-// Random delay.
-Random rnd = new Random();
-app.Use(async (context, next) =>
-{
-    await Task.Delay(rnd.Next(40, 200));
-    await next(context);
-});
-app.UseHttpsRedirection();
-app.UseServiceLevelIndicator();
-app.UseAuthorization();
-
 app.MapControllers();
-
+app.MapGet("/health", () => Results.Ok());
 app.Run();
+
+/// <summary>
+/// Application entry point for integration tests.
+/// </summary>
+public partial class Program;

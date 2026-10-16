@@ -1,9 +1,12 @@
 <Solution>
   <Folder Name="/Sample/">
     <Project Path="sample/ConsoleApp/SampleConsoleSLI.csproj" />
+    <Project Path="sample/FocusedSamples.Tests/FocusedSamples.Tests.csproj" />
+    <Project Path="sample/GenerateSli.Tests/GenerateSli.Tests.csproj" />
     <Project Path="sample/GenerateSli/GenerateSli.csproj" />
     <Project Path="sample/MinApi/SampleMinimalApiSli.csproj" />
-    <Project Path="sample/WebApi/SampleWebApplicationSLI.csproj" />
+    <Project Path="sample/SliProductionDemo.Tests/SliProductionDemo.Tests.csproj" />
+    <Project Path="sample/SliProductionDemo/SliProductionDemo.csproj" />
     <Project Path="sample/WebApiVersioned/SampleVersionedWebApplicationSLI.csproj" />
   </Folder>
   <Folder Name="/Trellis.ServiceLevelIndicators.Asp.ApiVersioning/">
