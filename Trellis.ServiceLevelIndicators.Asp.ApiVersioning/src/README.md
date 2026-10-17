@@ -61,7 +61,7 @@ run from its Git root:
 
 ```powershell
 dotnet new tool-manifest --output .config
-dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.20 --tool-manifest .config/dotnet-tools.json
+dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.22 --tool-manifest .config/dotnet-tools.json
 dotnet tool run agentdocs init <solution-or-project>
 ```
 
@@ -72,7 +72,7 @@ lists `Trellis.ServiceLevelIndicators.Asp.ApiVersioning` as pending and prints t
 `dotnet tool run agentdocs sync` to install the guides under Git-root
 `.agentdocs/`. The guide is on-demand: the generated index describes it, and an
 agent opens it when its task concerns SLI metrics. After a package upgrade, run
-`dotnet restore` and then `dotnet tool run agentdocs sync`.
+`dotnet restore --force` and then `dotnet tool run agentdocs sync`.
 
 ## Further Reading
 

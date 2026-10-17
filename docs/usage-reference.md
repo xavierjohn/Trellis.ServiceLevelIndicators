@@ -542,13 +542,13 @@ Ordinary restore/build does not write `.github/`, `AGENTS.md`, or `.agentdocs/` 
 
 ```powershell
 dotnet new tool-manifest --output .config
-dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.20 --tool-manifest .config\dotnet-tools.json
+dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.22 --tool-manifest .config\dotnet-tools.json
 dotnet tool run agentdocs init <solution-or-project>
 ```
 
 Reuse an existing root `.config\dotnet-tools.json` instead of creating another. Restoring a package never activates its guide. `init` lists packages that publish guidance as pending and prints the package IDs to add to `approvedPackages` in `.agentdocs/policy.json`. Add the SLI packages you trust, then run `dotnet tool run agentdocs sync` to install their guides into Git-root `.agentdocs/`; `init` also adds managed instruction pointers.
 
-Guides are on-demand: the generated index lists each with a description, and an agent opens one when its task concerns SLI metrics. After a package upgrade, run `dotnet restore` and `dotnet tool run agentdocs sync`. The helper and tool are preview packages published on NuGet.org.
+Guides are on-demand: the generated index lists each with a description, and an agent opens one when its task concerns SLI metrics. After a package upgrade, run `dotnet restore --force` and `dotnet tool run agentdocs sync`. The forced restore refreshes NuGet's successful-restore checkpoint even when the resolved graph stays unchanged; the tool rejects stale restore output rather than installing outdated guidance. The helper and tool are preview packages published on NuGet.org.
 
 For maintainers, the three publishing projects use a pinned, private `Trellis.AgentDocs.Packaging` build dependency to generate manifests at pack time. Each project sets `TrellisApiRefDescription`, the one-line "Open when..." topic consumers see. Guides refer to sibling packages by ID rather than by link because every package installs into its own directory. The packaging build target is not included in published SLI packages. Run `pwsh -NoProfile -File build\test-guidance-packages.ps1` after packing to verify payloads and the absence of legacy consumer targets.
 
