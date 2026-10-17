@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Text.RegularExpressions;
+using System.Threading.Channels;
 using Microsoft.Extensions.Time.Testing;
 
 public sealed class ScenarioTests
@@ -146,17 +147,34 @@ public sealed class ScenarioTests
     }
 
     [Fact]
+    public async Task Virtual_time_waits_for_timer_registration_instead_of_spinning()
+    {
+        var time = new TimerObservingTimeProvider();
+        var started = time.GetTimestamp();
+        var advance = time.AdvanceTimersAsync(1);
+
+        advance.IsCompleted.Should().BeFalse();
+        time.GetElapsedTime(started).Should().Be(TimeSpan.Zero);
+
+        var delay = Task.Delay(TimeSpan.FromMinutes(2), time, TestContext.Current.CancellationToken);
+        await advance;
+        await delay.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        time.GetElapsedTime(started).Should().Be(TimeSpan.FromMinutes(2));
+    }
+
+    [Fact]
     public async Task Finite_mode_completes_exactly_one_cycle()
     {
         using var client = CreateClient(_ => new(HttpStatusCode.OK));
         using var output = new StringWriter();
         using var error = new StringWriter();
-        var time = new FakeTimeProvider();
+        var time = new TimerObservingTimeProvider();
 
-        await AdvanceUntilCompleteAsync(
-            ScenarioRunner.RunAsync(
-                client, new(client.BaseAddress!, 1, 2), output, error, TestContext.Current.CancellationToken, time),
-            time);
+        var run = ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 1, 2), output, error, TestContext.Current.CancellationToken, time);
+        await time.AdvanceTimersAsync(10);
+        await run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         output.ToString().Should().Contain("Cycle 1").And.NotContain("Cycle 2").And.Contain("Scenario complete.");
         error.ToString().Should().BeEmpty();
@@ -169,13 +187,13 @@ public sealed class ScenarioTests
         using var client = CreateClient(_ => new(HttpStatusCode.OK));
         using var output = new CycleCancellingWriter(cancellation, "Cycle 2");
         using var error = new StringWriter();
-        var time = new FakeTimeProvider();
+        var time = new TimerObservingTimeProvider();
 
-        var act = () => AdvanceUntilCompleteAsync(
-            ScenarioRunner.RunAsync(
-                client, new(client.BaseAddress!, 1, 2, Continuous: true), output, error, cancellation.Token, time),
-            time);
+        var run = ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 1, 2, Continuous: true), output, error, cancellation.Token, time);
+        await time.AdvanceTimersAsync(10);
 
+        var act = () => run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await act.Should().ThrowAsync<OperationCanceledException>();
         output.ToString().Should().Contain("Cycle 1").And.Contain("Cycle 2").And.NotContain("Scenario complete.");
         error.ToString().Should().BeEmpty();
@@ -203,7 +221,7 @@ public sealed class ScenarioTests
         });
         using var output = new CycleCancellingWriter(cancellation, "Cycle 2");
         using var error = new StringWriter();
-        var time = new FakeTimeProvider();
+        var time = new TimerObservingTimeProvider();
 
         var run = ScenarioRunner.RunAsync(
             client, new(client.BaseAddress!, 1, 2, Continuous: true), output, error, cancellation.Token, time);
@@ -211,7 +229,8 @@ public sealed class ScenarioTests
         run.IsCompleted.Should().BeFalse();
         error.ToString().Should().Contain(diagnostic).And.Contain("Continuing traffic.");
 
-        var act = () => AdvanceUntilCompleteAsync(run, time);
+        await time.AdvanceTimersAsync(10);
+        var act = () => run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await act.Should().ThrowAsync<OperationCanceledException>();
 
         requests.Should().BeGreaterThan(1);
@@ -279,10 +298,9 @@ public sealed class ScenarioTests
         using var error = new StringWriter();
         var time = new FakeTimeProvider();
 
-        var act = () => AdvanceUntilCompleteAsync(
-            ScenarioRunner.RunAsync(
-                client, new(client.BaseAddress!, 30, 1), output, error, TestContext.Current.CancellationToken, time),
-            time);
+        var act = () => ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 30, 1), output, error, TestContext.Current.CancellationToken, time)
+            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await act.Should().ThrowAsync<Exception>()
             .Where(ex => timeout ? ex is OperationCanceledException : ex is HttpRequestException);
@@ -308,19 +326,22 @@ public sealed class ScenarioTests
         { BaseAddress = new Uri("http://demo.test/") };
         using var output = new StringWriter();
         using var error = new StringWriter();
-        var time = new FakeTimeProvider();
+        var time = new TimerObservingTimeProvider();
         var run = ScenarioRunner.RunAsync(
             client, new(client.BaseAddress!, 30, 10), output, error, cancellation.Token, time);
 
         try
         {
-            await AdvanceUntilAsync(() => Volatile.Read(ref requests) >= 2, time);
+            await time.AdvanceTimersAsync(1);
+            await time.WaitForTimerAsync();
             first.SetException(new HttpRequestException("An earlier request failed."));
-            await AdvanceUntilAsync(() => client.FirstPayload?.IsFaulted == true, time, TimeSpan.Zero);
+            var firstFailure = () => client.FirstPayload!.WaitAsync(
+                TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await firstFailure.Should().ThrowAsync<HttpRequestException>();
             cancellation.Cancel();
             second.SetCanceled(cancellation.Token);
 
-            var act = () => AdvanceUntilCompleteAsync(run, time);
+            var act = () => run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             await act.Should().ThrowAsync<OperationCanceledException>();
             output.ToString().Should().NotContain("Scenario complete.");
         }
@@ -355,21 +376,25 @@ public sealed class ScenarioTests
         });
         using var output = new StringWriter();
         using var error = new StringWriter();
-        var time = new FakeTimeProvider();
+        var time = new TimerObservingTimeProvider();
         var original = new HttpRequestException("The initiating request failure.");
         var run = ScenarioRunner.RunAsync(
             client, new(client.BaseAddress!, 30, 10), output, error, cancellation.Token, time);
 
         try
         {
-            await AdvanceUntilAsync(() => secondToken.Task.IsCompleted, time);
+            await time.AdvanceTimersAsync(1);
+            var requestToken = await secondToken.Task.WaitAsync(
+                TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             first.SetException(original);
-            await AdvanceUntilAsync(() => secondToken.Task.Result.IsCancellationRequested, time, TimeSpan.Zero);
+            var stopping = () => Task.Delay(Timeout.InfiniteTimeSpan, requestToken)
+                .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await stopping.Should().ThrowAsync<OperationCanceledException>();
             if (shutdown)
                 cancellation.Cancel();
             second.SetException(new InvalidOperationException("An unexpected secondary failure."));
 
-            var act = () => AdvanceUntilCompleteAsync(run, time);
+            var act = () => run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             if (shutdown)
             {
                 await act.Should().ThrowAsync<OperationCanceledException>();
@@ -419,11 +444,12 @@ public sealed class ScenarioTests
         });
         using var output = new StringWriter();
         using var error = new StringWriter();
-        var time = new FakeTimeProvider();
+        var time = new TimerObservingTimeProvider();
         var run = ScenarioRunner.RunAsync(
             client, new(client.BaseAddress!, 1, 2), output, error, TestContext.Current.CancellationToken, time);
 
-        await AdvanceUntilAsync(() => Volatile.Read(ref requests) >= 2, time);
+        await time.AdvanceTimersAsync(1);
+        await time.WaitForTimerAsync();
         time.Advance(TimeSpan.FromSeconds(1));
         first.SetException(new HttpRequestException("A request failed while draining."));
 
@@ -462,16 +488,16 @@ public sealed class ScenarioTests
         });
         using var output = new StringWriter();
         using var error = new BackpressureObservingWriter();
-        var time = new FakeTimeProvider();
+        var time = new TimerObservingTimeProvider();
         var run = ScenarioRunner.RunAsync(
             client, new(client.BaseAddress!, 30, 1_000, Continuous: continuous),
             output, error, cancellation.Token, time);
 
         try
         {
-            await AdvanceUntilAsync(() => error.LimitReached.Task.IsCompleted, time);
+            await time.AdvanceTimersAsync(31);
+            await error.LimitReached.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             time.Advance(TimeSpan.FromSeconds(5));
-            await Task.Yield();
 
             Volatile.Read(ref requests).Should().Be(32);
             concurrency.Max().Should().Be(32);
@@ -503,31 +529,30 @@ public sealed class ScenarioTests
             return completion.Task.WaitAsync(token);
         });
         using var output = new StringWriter();
-        using var error = new StringWriter();
-        var time = new FakeTimeProvider();
+        using var error = new BackpressureObservingWriter();
+        var time = new TimerObservingTimeProvider();
         var run = ScenarioRunner.RunAsync(
             client, new(client.BaseAddress!, 30, 100, Continuous: true),
             output, error, cancellation.Token, time);
 
         try
         {
-            await AdvanceUntilAsync(() => requests.Count >= 32, time);
+            await time.AdvanceTimersAsync(31);
+            await error.LimitReached.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             time.Advance(TimeSpan.FromSeconds(5));
             requests.Count.Should().Be(32);
 
             foreach (var completion in requests.ToArray())
                 completion.SetResult(new(HttpStatusCode.OK));
 
-            await AdvanceUntilAsync(() => requests.Count > 32, time, TimeSpan.Zero);
-            await Task.Yield();
+            (await time.WaitForTimerAsync()).Should().Be(TimeSpan.FromMilliseconds(10));
             requests.Count.Should().Be(33);
 
             time.Advance(TimeSpan.FromMilliseconds(9));
-            await Task.Yield();
             requests.Count.Should().Be(33);
 
             time.Advance(TimeSpan.FromMilliseconds(1));
-            await AdvanceUntilAsync(() => requests.Count > 33, time, TimeSpan.Zero);
+            (await time.WaitForTimerAsync()).Should().Be(TimeSpan.FromMilliseconds(10));
             requests.Count.Should().Be(34);
         }
         finally
@@ -601,13 +626,14 @@ public sealed class ScenarioTests
         });
         using var output = new CycleCancellingWriter(cancellation, "Cycle 1");
         using var error = new StringWriter();
-        var time = new FakeTimeProvider();
+        var time = new TimerObservingTimeProvider();
 
-        var act = () => AdvanceUntilCompleteAsync(
-            ScenarioRunner.RunAsync(
-                client, new(client.BaseAddress!, 1, 2, WaitForReady: true), output, error, cancellation.Token, time),
-            time);
+        var run = ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 1, 2, WaitForReady: true), output, error, cancellation.Token, time);
+        (await time.WaitForTimerAsync()).Should().Be(TimeSpan.FromSeconds(30));
+        await time.AdvanceTimersAsync(2);
 
+        var act = () => run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await act.Should().ThrowAsync<OperationCanceledException>();
         healthChecks.Should().Be(3);
         error.ToString().Should().Contain("Waiting for SliProductionDemo").And.Contain("503");
@@ -628,35 +654,47 @@ public sealed class ScenarioTests
         });
         using var output = new CycleCancellingWriter(cancellation, "Cycle 1");
         using var error = new StringWriter();
-        var time = new FakeTimeProvider();
+        var time = new TimerObservingTimeProvider();
 
-        var act = () => AdvanceUntilCompleteAsync(
-            ScenarioRunner.RunAsync(
-                client, new(client.BaseAddress!, 1, 2, WaitForReady: true), output, error, cancellation.Token, time),
-            time);
+        var run = ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 1, 2, WaitForReady: true), output, error, cancellation.Token, time);
+        (await time.WaitForTimerAsync()).Should().Be(TimeSpan.FromSeconds(30));
+        await time.AdvanceTimersAsync(1);
 
+        var act = () => run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await act.Should().ThrowAsync<OperationCanceledException>();
         healthChecks.Should().Be(2);
         error.ToString().Should().Contain("GET /health timed out.");
     }
 
-    [Fact]
-    public async Task Container_startup_has_a_bounded_readiness_deadline()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Container_startup_has_a_bounded_readiness_deadline(bool hanging)
     {
-        using var client = CreateClient(_ => new(HttpStatusCode.ServiceUnavailable));
+        var pending = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var client = CreateClient((_, token) => hanging
+            ? pending.Task.WaitAsync(token)
+            : Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
         using var output = new StringWriter();
         using var error = new StringWriter();
-        var time = new FakeTimeProvider();
+        var time = new TimerObservingTimeProvider();
+        var started = time.GetTimestamp();
 
-        var act = () => AdvanceUntilCompleteAsync(
-            ScenarioRunner.RunAsync(
-                client, new(client.BaseAddress!, 1, 2, WaitForReady: true),
-                output, error, TestContext.Current.CancellationToken, time),
-            time);
+        var run = ScenarioRunner.RunAsync(
+            client, new(client.BaseAddress!, 1, 2, WaitForReady: true),
+            output, error, TestContext.Current.CancellationToken, time);
+        (await time.WaitForTimerAsync()).Should().Be(TimeSpan.FromSeconds(30));
+        time.Advance(TimeSpan.FromMilliseconds(29_999));
+        run.IsCompleted.Should().BeFalse();
+        time.Advance(TimeSpan.FromMilliseconds(1));
 
+        var act = () => run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await act.Should().ThrowAsync<HttpRequestException>().WithMessage("*within 30 seconds*");
+        time.GetElapsedTime(started).Should().Be(TimeSpan.FromSeconds(30));
         output.ToString().Should().BeEmpty();
-        error.ToString().Should().Contain("Waiting for SliProductionDemo");
+        if (!hanging)
+            error.ToString().Should().Contain("Waiting for SliProductionDemo");
     }
 
     [Fact]
@@ -697,7 +735,7 @@ public sealed class ScenarioTests
         var run = ScenarioRunner.RunConsoleAsync(
             client, new(client.BaseAddress!, 30, 10), output, error, TestContext.Current.CancellationToken, time);
 
-        await AdvanceUntilCompleteAsync(run, time);
+        await run.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         (await run).Should().Be(1);
         error.ToString().Should().Contain("Scenario stopped:").And.Contain(diagnostic)
@@ -826,34 +864,33 @@ public sealed class ScenarioTests
         error.ToString().Should().BeEmpty();
     }
 
-    private static async Task AdvanceUntilCompleteAsync(Task run, FakeTimeProvider time)
-    {
-        await AdvanceUntilAsync(() => run.IsCompleted, time);
-        await run;
-    }
-
-    private static async Task AdvanceUntilAsync(Func<bool> completed, FakeTimeProvider time, TimeSpan? step = null)
-    {
-        for (var i = 0; i < 6_000 && !completed(); i++)
-        {
-            time.Advance(step ?? TimeSpan.FromMilliseconds(10));
-            // Let timer continuations run before advancing virtual time again.
-            await Task.Factory.StartNew(
-                static () => { },
-                TestContext.Current.CancellationToken,
-                TaskCreationOptions.PreferFairness,
-                TaskScheduler.Default).ConfigureAwait(
-                    ConfigureAwaitOptions.ContinueOnCapturedContext | ConfigureAwaitOptions.ForceYielding);
-        }
-
-        completed().Should().BeTrue("the scenario should make progress within bounded virtual-time steps");
-    }
-
     private static HttpClient CreateClient(Func<HttpRequestMessage, HttpResponseMessage> respond) =>
         CreateClient((request, _) => Task.FromResult(respond(request)));
 
     private static HttpClient CreateClient(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond) =>
         new(new ResponseHandler(respond)) { BaseAddress = new Uri("http://demo.test/") };
+
+    private sealed class TimerObservingTimeProvider : FakeTimeProvider
+    {
+        private readonly Channel<TimeSpan> timers = Channel.CreateUnbounded<TimeSpan>();
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            timers.Writer.TryWrite(dueTime).Should().BeTrue();
+            return timer;
+        }
+
+        public Task<TimeSpan> WaitForTimerAsync() =>
+            timers.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        public async Task AdvanceTimersAsync(int count)
+        {
+            for (var i = 0; i < count; i++)
+                Advance(await WaitForTimerAsync());
+        }
+    }
 
     private sealed class ResponseHandler(
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond) : HttpMessageHandler
