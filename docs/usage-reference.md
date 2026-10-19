@@ -542,7 +542,7 @@ Ordinary restore/build does not write `.github/`, `AGENTS.md`, or `.agentdocs/` 
 
 ```powershell
 dotnet new tool-manifest --output .config
-dotnet tool install Trellis.AgentDocs --version 0.1.0-preview.22 --tool-manifest .config\dotnet-tools.json
+dotnet tool install Trellis.AgentDocs --version 1.0.2 --tool-manifest .config\dotnet-tools.json
 dotnet tool run agentdocs init <solution-or-project>
 ```
 
