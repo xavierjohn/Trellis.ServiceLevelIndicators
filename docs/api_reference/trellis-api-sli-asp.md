@@ -387,7 +387,7 @@ Genuine unmatched routes are not measured. Abort-first availability can miss slo
 Install the SLI integration and the separate hosting/exporter dependencies:
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators.Asp --prerelease
+dotnet add package Trellis.ServiceLevelIndicators.Asp
 dotnet add package OpenTelemetry.Extensions.Hosting
 dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
 ```

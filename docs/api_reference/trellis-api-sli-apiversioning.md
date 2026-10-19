@@ -83,7 +83,7 @@ This enrichment is registered as a singleton via `TryAddEnumerable`, so calling 
 For MVC, install the versioning implementation and separate telemetry dependencies as well as SLI:
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators.Asp.ApiVersioning --prerelease
+dotnet add package Trellis.ServiceLevelIndicators.Asp.ApiVersioning
 dotnet add package Asp.Versioning.Mvc
 dotnet add package OpenTelemetry.Extensions.Hosting
 dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol

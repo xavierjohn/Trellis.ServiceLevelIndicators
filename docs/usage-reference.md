@@ -2,7 +2,7 @@
 
 Choose the correct package, wire it into a .NET application, and define the population and dimensions behind your SLIs. For a complete copyable Minimal API setup, start with the [root README](../README.md#installation).
 
-**Source-tree availability:** result selectors, endpoint exclusions, and the instrumentation failure policy are additions after `10.0.0-preview.37`; use a package containing these changes. They are not available in preview.37. The Docker demo builds the current source.
+**Availability:** result selectors, endpoint exclusions, and the instrumentation failure policy are available in 10.0.0 and later; they are not in `10.0.0-preview.37` or earlier.
 
 ## Package Matrix
 
@@ -23,7 +23,7 @@ dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
 
 The examples assume a host/application `builder`. Import `OpenTelemetry.Metrics`, `OpenTelemetry.Resources`, and `Trellis.ServiceLevelIndicators`. Custom-meter code also needs `System.Diagnostics.Metrics`.
 
-The OTLP exporter defaults to `http://localhost:4317`; set `OTEL_EXPORTER_OTLP_ENDPOINT` for your collector. The location examples use a plain region string and do not require Azure.Core. Use `--prerelease` when installing preview SLI packages.
+The OTLP exporter defaults to `http://localhost:4317`; set `OTEL_EXPORTER_OTLP_ENDPOINT` for your collector. The location examples use a plain region string and do not require Azure.Core.
 
 ## Metric Contract
 
@@ -48,7 +48,7 @@ The opt-in `operation.duration.threshold.count` counter has unit `{operation}`. 
 Install:
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators --prerelease
+dotnet add package Trellis.ServiceLevelIndicators
 ```
 
 Register with OpenTelemetry:
@@ -217,7 +217,7 @@ The DI container owns the singleton `ServiceLevelIndicator` and disposes any met
 Install:
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators.Asp --prerelease
+dotnet add package Trellis.ServiceLevelIndicators.Asp
 ```
 
 Register services:
@@ -337,7 +337,7 @@ The endpoint still executes and other ASP.NET Core/Application Insights telemetr
 Install:
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators.Asp.ApiVersioning --prerelease
+dotnet add package Trellis.ServiceLevelIndicators.Asp.ApiVersioning
 ```
 
 Register enrichment:
@@ -548,7 +548,7 @@ dotnet tool run agentdocs init <solution-or-project>
 
 Reuse an existing root `.config\dotnet-tools.json` instead of creating another. Restoring a package never activates its guide. `init` lists packages that publish guidance as pending and prints the package IDs to add to `approvedPackages` in `.agentdocs/policy.json`. Add the SLI packages you trust, then run `dotnet tool run agentdocs sync` to install their guides into Git-root `.agentdocs/`; `init` also adds managed instruction pointers.
 
-Guides are on-demand: the generated index lists each with a description, and an agent opens one when its task concerns SLI metrics. After a package upgrade, run `dotnet restore --force` and `dotnet tool run agentdocs sync`. The forced restore refreshes NuGet's successful-restore checkpoint even when the resolved graph stays unchanged; the tool rejects stale restore output rather than installing outdated guidance. The helper and tool are preview packages published on NuGet.org.
+Guides are on-demand: the generated index lists each with a description, and an agent opens one when its task concerns SLI metrics. After a package upgrade, run `dotnet restore --force` and `dotnet tool run agentdocs sync`. The forced restore refreshes NuGet's successful-restore checkpoint even when the resolved graph stays unchanged; the tool rejects stale restore output rather than installing outdated guidance. The helper and tool are published on NuGet.org.
 
 For maintainers, the three publishing projects use a pinned, private `Trellis.AgentDocs.Packaging` build dependency to generate manifests at pack time. Each project sets `TrellisApiRefDescription`, the one-line "Open when..." topic consumers see. Guides refer to sibling packages by ID rather than by link because every package installs into its own directory. The packaging build target is not included in published SLI packages. Run `pwsh -NoProfile -File build\test-guidance-packages.ps1` after packing to verify payloads and the absence of legacy consumer targets.
 

@@ -13,7 +13,7 @@ This package extends [Trellis.ServiceLevelIndicators.Asp](https://www.nuget.org/
 ## Installation
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators.Asp.ApiVersioning --prerelease
+dotnet add package Trellis.ServiceLevelIndicators.Asp.ApiVersioning
 ```
 
 > Requires [Trellis.ServiceLevelIndicators.Asp](https://www.nuget.org/packages/Trellis.ServiceLevelIndicators.Asp) (installed automatically as a dependency).

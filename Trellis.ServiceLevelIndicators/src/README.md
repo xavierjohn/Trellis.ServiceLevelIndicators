@@ -15,7 +15,7 @@ If you want automatic measurement of ASP.NET Core endpoints, use [Trellis.Servic
 ## Installation
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators --prerelease
+dotnet add package Trellis.ServiceLevelIndicators
 dotnet add package OpenTelemetry.Extensions.Hosting
 dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
 ```

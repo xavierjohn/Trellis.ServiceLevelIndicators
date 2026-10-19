@@ -324,7 +324,7 @@ Helpers for wiring the SLI meter into an OpenTelemetry pipeline.
 For a hosted OTLP pipeline, install:
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators --prerelease
+dotnet add package Trellis.ServiceLevelIndicators
 dotnet add package OpenTelemetry.Extensions.Hosting
 dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
 ```

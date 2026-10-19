@@ -84,14 +84,14 @@ Requires **.NET 10**. Choose the package for your application:
 
 The ASP.NET Core package includes core; the API-versioning package includes ASP.NET Core integration.
 
-**Source-tree availability:** result selectors, endpoint exclusions, and the instrumentation failure policy were added after `10.0.0-preview.37`. Use a package containing those changes for those APIs. The Docker demo builds the current source directly.
+**Availability:** result selectors, endpoint exclusions, and the instrumentation failure policy are available in 10.0.0 and later; they are not in `10.0.0-preview.37` or earlier.
 
 ### A complete Minimal API setup
 
 From an ASP.NET Core project, install SLI and the OpenTelemetry hosting/exporter packages:
 
 ```shell
-dotnet add package Trellis.ServiceLevelIndicators.Asp --prerelease
+dotnet add package Trellis.ServiceLevelIndicators.Asp
 dotnet add package OpenTelemetry.Extensions.Hosting
 dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
 ```

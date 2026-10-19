@@ -2,9 +2,9 @@
 
 ## Status
 
-Implemented in the pre-1.0 metric contract finalization.
+Implemented in the 10.0.0 metric contract finalization.
 
-The first-preview additions for TFR-26/27/29 shipped in `10.0.0-preview.37` and completed consumer acceptance. TFR-28 result selectors and TFR-30 endpoint exclusion are implemented in the source tree but are not part of preview.37.
+The first-preview additions for TFR-26/27/29 shipped in `10.0.0-preview.37` and completed consumer acceptance. TFR-28 result selectors and TFR-30 endpoint exclusion shipped in 10.0.0.
 
 This is a design record, not the getting-started guide. The metric and instrumentation-failure contracts below are implemented; the Results adapter, analyzers, testing package, and bucket helper remain future work. Use the [live demo](../../README.md#try-the-live-demo) and [integration reference](../usage-reference.md) for current setup and runnable examples.
 
@@ -12,7 +12,7 @@ This is a design record, not the getting-started guide. The metric and instrumen
 
 `Trellis.ServiceLevelIndicators` is part of the Trellis AI-first .NET framework. Its role is to provide structural observability guardrails for generated and hand-written services by emitting service-level latency metrics with stable, meaningful dimensions.
 
-The library is currently in the .NET 10 preview/alpha phase. The changes in this RFC finalize the intended pre-1.0 metric contract; no migration guide is required for previous alpha behavior.
+The changes in this RFC finalize the metric contract for the 10.0.0 release; no migration guide is required for previous preview behavior.
 
 ## Standards and platform alignment
 
