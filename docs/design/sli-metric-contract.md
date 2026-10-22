@@ -6,7 +6,7 @@ Implemented in the pre-1.0 metric contract finalization.
 
 The first-preview additions for TFR-26/27/29 shipped in `10.0.0-preview.37` and completed consumer acceptance. TFR-28 result selectors and TFR-30 endpoint exclusion are implemented in the source tree but are not part of preview.37.
 
-This is a design record, not the getting-started guide. The metric and instrumentation-failure contracts below are implemented; the Results adapter, analyzers, testing package, and bucket helper remain future work. Use the [live demo](../../README.md#try-the-live-demo) and [integration reference](../usage-reference.md) for current setup and runnable examples.
+This is a design record, not the getting-started guide. The metric and instrumentation-failure contracts below are implemented; the Results adapter, analyzers, testing package, bucket helper, and value-based dimension guardrails remain future work. Use the [live demo](../../README.md#try-the-live-demo) and [integration reference](../usage-reference.md) for current setup and runnable examples.
 
 ## Context
 
@@ -122,14 +122,13 @@ success_rate = count(Outcome == "Success") / (count(Outcome == "Success") + coun
 
 `ClientError` and `Ignored` are excluded from the default denominator. Services may report `ClientError` separately or opt into policy-specific SLO formulas.
 
-Outcome precedence:
+Outcome assignment depends on the measurement path:
 
-1. Explicit user-set outcome.
-2. Helper inference.
-3. Middleware inference.
-4. Default `Ignored`.
+- Raw scopes record the explicit outcome, or `Ignored` when none is set.
+- Core helpers infer an outcome on normal completion without replacing an explicitly assigned outcome. Action/selector exceptions force `Failure`; `OperationCanceledException` forces `Ignored`.
+- ASP.NET middleware assigns its request outcome after endpoint handling: observed abort, then escaping exception, then configured/default normal-response classification. This replaces any outcome previously set by the handler; use `ClassifyHttpOutcome(...)` for normal-response overrides.
 
-Observed exceptions follow the helper and HTTP rules below. Raw `StartMeasuring` scopes cannot detect escaping exceptions.
+Raw `StartMeasuring` scopes cannot detect escaping exceptions.
 
 ## ASP.NET classification defaults
 
@@ -143,7 +142,7 @@ Observed exceptions follow the helper and HTTP rules below. Raw `StartMeasuring`
 | Observed request abort, regardless of escaping exception shape | `Ignored` |
 | Escaping exception without a request abort | `Failure` |
 
-Application/business cancellations remain configurable.
+A cancellation exception without a canceled `HttpContext.RequestAborted` token follows the escaping-exception rule and records `Failure`. HTTP classifiers cannot override aborts or escaping exceptions.
 
 429 reduces success rate by default because throttling is treated as a service capacity/backpressure signal. Services that treat 429 as client-driven may classify it as `ClientError`.
 
@@ -182,7 +181,7 @@ Core `Measure(...)` and `MeasureAsync(...)` helpers without a result selector in
 
 Generic sync and `Task<T>` overloads also accept `Func<T, SliOutcome> classifyOutcome`. The selector runs once after successful completion, accepts the original result including null, and returns a defined outcome. The original result is returned unchanged. Both metrics use the selected outcome; action exceptions bypass the selector. Action/selector exceptions propagate with `Failure`, while `OperationCanceledException` records `Ignored`. Undefined selector outcomes are rejected before assignment and record `Failure`. Existing overloads keep their previous inference.
 
-Core helpers are not ASP.NET-specific and do not detect client disconnects. ASP.NET middleware maps `HttpContext.RequestAborted` / request-aborted cancellation to `Ignored`; application/business cancellations remain configurable.
+Core helpers are not ASP.NET-specific and do not detect client disconnects. ASP.NET middleware maps a canceled `HttpContext.RequestAborted` token to `Ignored`; a cancellation exception without that observed abort records `Failure`.
 
 Automatic Trellis `Result<T>` mapping belongs in a future optional `Trellis.ServiceLevelIndicators.Results` adapter, not in the core package. Generic core result selectors remain type-agnostic.
 
@@ -211,13 +210,12 @@ CustomerResourceId = "Unknown"
 
 Diagnostics:
 
-- Log a one-time warning per operation/location when `CustomerResourceId = Unknown`.
 - Increment `sli.diagnostics.unknown_customer_resource_id` every time `CustomerResourceId = Unknown`.
 - Do not throw, drop, cap, or replace required dimensions by default.
 
 `Unknown` is deliberate and distinct from `ActivityStatusCode.Unset`.
 
-The one-time warning scope is per process lifetime. The implementation should bound the warning cache to avoid unbounded memory growth.
+Null, empty, and whitespace customer resource identifiers normalize to `Unknown`; nonblank identifiers pass through unchanged. Unknown-resource detection currently uses only the diagnostic counter, not a one-time warning or warning cache.
 
 Diagnostic counter contract:
 
@@ -270,7 +268,7 @@ Internal behavior:
 - `Dispose()` becomes terminal before recording and remains idempotent even on failure or reentrant disposal.
 - Recording failures are warning-logged and reported through EventSource, never retried or thrown over an application exception. Provider failures may leave partial emission.
 - Direct `Record(...)`, `AddAttribute(...)`, and `SetOutcome(...)` validation remains strict; undefined outcomes are rejected before recording side effects.
-- `SetOutcome(...)` after disposal has no effect.
+- Changing an outcome after disposal does not alter an already-recorded measurement; undefined values are still rejected.
 
 ### Helper APIs
 
@@ -286,11 +284,11 @@ Core helper APIs infer outcomes:
 Helpers rethrow exceptions and cancellations after setting the inferred outcome.
 Rethrows should use `throw;` so exception stack traces are preserved.
 
-If user code explicitly sets `Failure` inside a helper and completes normally, explicit `Failure` remains. Helper success inference does not promote it to `Success`. Unhandled exceptions observed by helpers still force `Failure`.
+Normal-completion inference does not replace an explicitly assigned outcome. Action or selector exceptions still force the failure/cancellation outcomes above.
 
 ### ASP.NET middleware
 
-Middleware owns ASP.NET request measurement. Core helpers and ASP.NET middleware normally do not co-apply to the same `MeasuredOperation`; precedence exists for explicit outcomes, inferred outcomes, and future extension points.
+Middleware owns ASP.NET request measurement. Core helper calls made within a request create separate scopes; they do not classify the middleware's request scope.
 
 Middleware should:
 
@@ -344,16 +342,16 @@ The API versioning package remains an enrichment package. It continues to emit `
 
 The rule is stable and meaningful dimensions, not low cardinality.
 
-`CustomerResourceId` may legitimately have very high cardinality at Microsoft/Azure scale, such as user object IDs in login services. Required dimensions must pass through exactly by default.
+`CustomerResourceId` may legitimately have very high cardinality at Microsoft/Azure scale, such as stable target object IDs. Nonblank identifiers pass through exactly; missing or blank identifiers normalize to `Unknown`.
 
-Default behavior:
+Current behavior:
 
-- Required dimensions: diagnostics only; never mutate by default.
-- Optional/custom dimensions: diagnostics only by default.
-- Strict blocking or replacement: opt-in only.
-- Runtime suspicious-value heuristics are off by default to avoid hot-path overhead at high scale; analyzers and documentation are the default guardrails.
+- Unknown customer resources increment the diagnostic counter described above.
+- Attribute-name validation rejects reserved or duplicate names.
+- Required/custom dimension values are not scanned for suspicious content.
+- No configurable strict value-blocking or replacement policy is implemented.
 
-Diagnostics should look for unstable values such as:
+Future analyzers or opt-in value diagnostics could look for unstable values such as:
 
 - request IDs,
 - timestamps,

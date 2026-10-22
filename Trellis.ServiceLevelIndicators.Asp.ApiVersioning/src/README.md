@@ -31,7 +31,7 @@ builder.Services.AddServiceLevelIndicator(options =>
 .AddApiVersion();
 ```
 
-This registers `ApiVersionEnrichment`, which reads the resolved API version from the request and emits it as an attribute on every SLI measurement.
+This registers `ApiVersionEnrichment`, which reads the resolved API version from the request and emits it on automatic HTTP SLI measurements. It does not enrich separate manual core measurements.
 
 Already-resolved versions are retained on aborted MVC and Minimal API requests. The built-in enrichment opts into `IEnrichment<WebEnrichmentContext>.EnrichOnCancellation` because it performs bounded metadata access without I/O; arbitrary user async enrichments are still skipped after cancellation.
 
@@ -47,7 +47,7 @@ When `ServiceLevelIndicatorOptions.LatencyThresholds` enables `operation.duratio
 
 | Attribute | Description |
 |-----------|-------------|
-| `http.api.version` | The single resolved API version string (e.g. `1.0`, `2024-01-15`), `Neutral` for API-version-neutral endpoints, `Unspecified` when no version is requested and no default is assumed, or an empty string for invalid or ambiguous requests |
+| `http.api.version` | The single resolved version, including an assumed default (e.g. `1.0`, `2024-01-15`); `Neutral` for a version-neutral endpoint with no supplied version; `Unspecified` when no version is requested and no default is assumed; or an empty string for invalid or ambiguous versions |
 
 This attribute is added alongside the standard dimensions emitted by `Trellis.ServiceLevelIndicators.Asp`. On aborts, the duration includes `sli.request.aborted = true` and omits `http.response.status.code` if headers have not started. The threshold counter omits HTTP status, method, and the abort-exception diagnostic.
 

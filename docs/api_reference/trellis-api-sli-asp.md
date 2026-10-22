@@ -3,7 +3,7 @@ package: Trellis.ServiceLevelIndicators.Asp
 namespaces: [Trellis.ServiceLevelIndicators]
 types: [IServiceLevelIndicatorBuilder, ServiceLevelIndicatorCoreServiceCollectionExtensions, ServiceLevelIndicatorServiceCollectionExtensions, ServiceLevelIndicatorHttpOptions, HttpOutcomeClassifier, ServiceLevelIndicatorApplicationBuilderExtensions, EndpointBuilderExtensions, ServiceLevelIndicatorAttribute, ExcludeFromServiceLevelIndicatorAttribute, CustomerResourceIdAttribute, MeasureAttribute, CustomerResourceIdMetadata, MeasureMetadata, WebEnrichmentContext, IServiceLevelIndicatorFeature, HttpContextExtensions]
 version: v10
-last_verified: 2026-10-16
+last_verified: 2026-10-21
 audience: [llm]
 ---
 
@@ -169,6 +169,8 @@ Endpoint and route-group integration.
 | `public static TBuilder AddServiceLevelIndicator<TBuilder>(this TBuilder builder, string? operation = default) where TBuilder : notnull, IEndpointConventionBuilder` | `TBuilder` | Marks a Minimal API endpoint for SLI emission. Scans the handler delegate's parameters for `[CustomerResourceId]` and `[Measure]` and projects them into endpoint metadata. When `operation` is `null`, the route template is used. |
 | `public static TBuilder ExcludeFromServiceLevelIndicator<TBuilder>(this TBuilder builder) where TBuilder : notnull, IEndpointConventionBuilder` | `TBuilder` | Excludes an endpoint, health-check mapping, or route group. Returns the original builder type for chaining; throws for a null builder. |
 
+Use `AddServiceLevelIndicator()` on the endpoint or its route group to discover `[CustomerResourceId]` and `[Measure]` handler-parameter attributes, even when `AutomaticallyEmitted` is `true`. Automatic emission alone does not project these attributes into route-value metadata.
+
 Register SLI once for each endpoint: either on its route group or on the handler. Applying `AddServiceLevelIndicator()` to both re-scans the same parameters and can fail with duplicate customer-resource metadata.
 
 ---
@@ -230,7 +232,7 @@ On MVC, use `[ExcludeFromServiceLevelIndicator]` on the action or controller.
 public sealed class CustomerResourceIdAttribute : Attribute
 ```
 
-Tag a route/handler parameter as the source of the `CustomerResourceId` tag. The middleware reads the matching route value at request time. Only one parameter per endpoint may carry this attribute (enforced at startup for MVC and at endpoint-finalize for Minimal APIs).
+Tag a route parameter as the source of the `CustomerResourceId` tag. The middleware reads the matching route value at request time, not model-bound query-string or body values. Only one parameter per endpoint may carry this attribute (enforced at startup for MVC and at endpoint-finalize for Minimal APIs).
 
 ---
 
@@ -243,7 +245,7 @@ Tag a route/handler parameter as the source of the `CustomerResourceId` tag. The
 public sealed class MeasureAttribute(string? name = default) : Attribute
 ```
 
-Tag a route/handler parameter to emit it as an additional measurement attribute.
+Tag a route parameter to emit its matching route value as an additional measurement attribute. Query-string and body values are not read by this attribute.
 
 **Properties**
 
@@ -379,6 +381,8 @@ Throws `InvalidOperationException` if a second instance of the middleware tries 
 `Enrich` and `EnrichAsync` delegates do not opt into cancellation. Custom `IEnrichment<WebEnrichmentContext>` implementations may set `EnrichOnCancellation => true` only for bounded, cancellation-safe metadata access without I/O. Skipped enrichments do not stop later safe ones. The API-version integration opts in, retaining resolved versions on aborted requests.
 
 Genuine unmatched routes are not measured. Abort-first availability can miss slow dependency outages when callers disconnect before failure arrives; pair availability with a successful-and-fast latency objective that includes slow aborts. The diagnostic is not a reliable standalone outage detector.
+
+A cancellation exception without a canceled `HttpContext.RequestAborted` token records `Failure`; it is not a request abort. The middleware assigns the HTTP outcome after endpoint handling, replacing an outcome previously set by the handler. Use `ClassifyHttpOutcome(...)` for normal-response overrides.
 
 ---
 
