@@ -300,6 +300,8 @@ app.MapPost("/projects/{projectId}/sync/{mode:regex(^(quick|standard|slow)$)}",
 
 The named target must be a stable, validated resource identifier. The route constraint bounds `SyncMode` to three values. See the [runnable Minimal API example](../sample/MinApi/Program.cs) for endpoint opt-in and bounded project IDs. Its unmarked health and documentation endpoints remain unmeasured because automatic emission is disabled.
 
+Use `AddServiceLevelIndicator()` on an endpoint or its route group to discover `[CustomerResourceId]` and `[Measure]` handler-parameter attributes, even when `AutomaticallyEmitted` is `true`. Automatic emission alone does not project these attributes into route-value metadata.
+
 Register `AddServiceLevelIndicator()` once per endpoint, either on its group or on the handler. Applying it to both can duplicate parameter metadata and fail endpoint initialization.
 
 ## Exclude Endpoints from Automatic SLI Measurement
@@ -351,7 +353,7 @@ builder.Services.AddServiceLevelIndicator(options =>
 .AddApiVersion();
 ```
 
-This adds the `http.api.version` metric dimension when Asp.Versioning is present. The value is the single resolved API version, `Neutral`, `Unspecified`, or an empty string when the requested version is invalid or ambiguous.
+This adds the `http.api.version` metric dimension when Asp.Versioning is present. The value is the single resolved version, including an assumed default; `Neutral` for a version-neutral endpoint with no supplied version; `Unspecified` when no version is supplied or assumed; or an empty string when the requested version is invalid or ambiguous.
 
 `AddApiVersion()` enriches SLI; it does not configure Asp.Versioning routing or version discovery. See the [versioned MVC example](../sample/WebApiVersioned/Program.cs) for the complete registration and query-string version reader.
 
@@ -398,7 +400,7 @@ builder.Services.AddServiceLevelIndicator(options =>
 
 Enrichment runs after endpoint handling and can overwrite a target already extracted from `[CustomerResourceId]`. Only call `SetCustomerResourceId` with the resolved target of the operation. A caller's `tid` claim is not necessarily that target, especially for cross-tenant administration; using it requires an explicit same-tenant guarantee. Caller identity belongs in audit logs/traces, not SLI dimensions.
 
-`[Measure]` adds a parameter value as an attribute using the parameter name (or its configured override). Use bounded categories such as the `SyncMode` route above, never personal names or arbitrary text.
+`[CustomerResourceId]` and `[Measure]` read the matching route value, not model-bound query-string or body values. `[Measure]` uses the parameter name (or its configured override) as the attribute name. Use bounded categories such as the `SyncMode` route above, never personal names or arbitrary text.
 
 ## Status Semantics
 
@@ -419,6 +421,8 @@ For ASP.NET Core:
 | Observed request abort, with or without an escaping exception | `Ignored` |
 
 HTTP precedence is abort first, then escaping exception, then normal-response classification. Aborts before response headers start omit `http.response.status.code`; started responses retain the actual status. The middleware never invents 499 or an abort-related 500.
+
+A cancellation exception without a canceled `HttpContext.RequestAborted` token is an escaping exception and records `Failure`, unlike the core helpers' cancellation inference. The middleware assigns the request outcome after endpoint handling, replacing any outcome set by the handler. Use `ClassifyHttpOutcome(...)` to customize normal-response classification.
 
 For an abort with an escaping exception, `sli.request.abort_exception` is `cancellation` for a top-level `OperationCanceledException` (including `TaskCanceledException`), otherwise `other`. Wrapped cancellations and aggregate exceptions are `other`; the diagnostic does not infer cause. It is absent without an escaping exception or without an abort, and is omitted from the threshold counter.
 
@@ -587,8 +591,8 @@ ASP.NET Core package:
 - `HttpOutcomeClassifier.ClassifyStatusCode(int)`
 - `IServiceLevelIndicatorBuilder.Enrich(...)`
 - `IServiceLevelIndicatorBuilder.EnrichAsync(...)`
-- `EndpointConventionBuilder.AddServiceLevelIndicator(...)`
-- `EndpointConventionBuilder.ExcludeFromServiceLevelIndicator()`
+- `IEndpointConventionBuilder.AddServiceLevelIndicator(...)`
+- `IEndpointConventionBuilder.ExcludeFromServiceLevelIndicator()`
 - `[ExcludeFromServiceLevelIndicator]` on MVC controllers/actions
 - `HttpContext.GetMeasuredOperation()`
 - `HttpContext.TryGetMeasuredOperation(...)`

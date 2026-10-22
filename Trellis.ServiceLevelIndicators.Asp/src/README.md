@@ -20,11 +20,13 @@ dotnet add package OpenTelemetry.Extensions.Hosting
 dotnet add package OpenTelemetry.Exporter.OpenTelemetryProtocol
 ```
 
-The OpenTelemetry hosting and OTLP exporter extensions are separate dependencies. Import `OpenTelemetry.Metrics` and `Trellis.ServiceLevelIndicators`. The repository README includes a complete copyable Minimal API setup.
+The OpenTelemetry hosting and OTLP exporter extensions are separate dependencies. Import `OpenTelemetry.Metrics` and `Trellis.ServiceLevelIndicators`. The examples below assume an existing `builder` created with `WebApplication.CreateBuilder(args)`. The repository README includes a complete copyable Minimal API setup.
 
 ## Quick Start — MVC Controllers
 
 ```csharp
+builder.Services.AddControllers();
+
 // 1. Register with OpenTelemetry
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics =>
@@ -33,7 +35,7 @@ builder.Services.AddOpenTelemetry()
         metrics.AddOtlpExporter();
     });
 
-// 2. Configure SLI — AddMvc() enables attribute-based overrides
+// 2. Configure SLI — AddMvc() enables route-parameter metadata
 builder.Services.AddServiceLevelIndicator(options =>
 {
     options.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
@@ -41,8 +43,14 @@ builder.Services.AddServiceLevelIndicator(options =>
 .AddMvc();
 
 // 3. Add the middleware
+var app = builder.Build();
+app.UseRouting();
 app.UseServiceLevelIndicator();
+app.MapControllers();
+app.Run();
 ```
+
+The SLI `.AddMvc()` call installs parameter conventions; it does not register controllers or map their routes.
 
 ## Quick Start — Minimal APIs
 
@@ -54,17 +62,23 @@ builder.Services.AddServiceLevelIndicator(options =>
     options.LocationId = ServiceLevelIndicator.CreateLocationId("public", "westus3");
 });
 
+var app = builder.Build();
+app.UseRouting();
 app.UseServiceLevelIndicator();
 
 // Automatic emission is enabled by default. If you set
 // options.AutomaticallyEmitted = false, mark individual endpoints:
 app.MapGet("/hello", () => "Hello World!")
     .AddServiceLevelIndicator();
+
+app.Run();
 ```
 
 If you configure a custom `Meter` in `ServiceLevelIndicatorOptions`, register that same meter with OpenTelemetry by calling `AddServiceLevelIndicatorInstrumentation(meter)`.
 
-Register `AddServiceLevelIndicator()` once per Minimal API endpoint, either on its group or on the handler. Applying it to both can duplicate parameter metadata and fail endpoint initialization.
+Use `AddServiceLevelIndicator()` on a Minimal API endpoint or its route group to discover `[CustomerResourceId]` and `[Measure]` handler-parameter attributes, even when automatic emission is enabled. Without it, requests can be measured automatically, but those attributes do not contribute route-value metadata. The attributes read route values, not query-string or body values.
+
+Register `AddServiceLevelIndicator()` once per endpoint, either on its group or on the handler. Applying it to both can duplicate parameter metadata and fail endpoint initialization.
 
 `ServiceLevelIndicator` is a sealed `IDisposable` registered as a singleton; the DI container disposes it (and the `Meter` it created) at host shutdown — no manual cleanup needed. A `Meter` you supply via `Options.Meter` is owned by you and is never disposed by SLI.
 
@@ -112,7 +126,7 @@ For `GET /teams/{teamId}` made by user `xa1` for team `team1`:
 - ✅ `CustomerResourceId = "team1"` (the resource being acted on)
 - ❌ NOT `"xa1"` — that's the *caller*; keep identities in audit logs/traces, not metric dimensions
 - ❌ NOT a fresh `Guid.NewGuid()` per request — that explodes metric cardinality
-- ❌ NOT the raw path `"/teams/team1"` — already covered by `Operation`
+- ❌ NOT the raw path `"/teams/team1"` — use the stable target ID; `Operation` carries the route template, not the concrete request path
 
 Wire it by decorating the route parameter that names the target resource:
 
@@ -140,7 +154,7 @@ Or set it imperatively from resolved target metadata via `Enrich` or `HttpContex
 
 A trailing slash is trimmed from the resolved template (the literal root `/` is preserved), so a route group's root endpoint — where the `/orders` group prefix combines with the `/` pattern to produce `/orders/` — shares one series with `/orders` instead of emitting a separate `POST /orders/`.
 
-If none of those yield a bounded template (e.g. a synthetic problem-details endpoint emitted by Asp.Versioning when the API version is invalid), the middleware emits the sentinel `"<METHOD> <unrouted>"` and logs a one-time warning per endpoint name. **If you see `<unrouted>` in your metrics, an endpoint is missing a route template — fix it by adding an attribute route or moving to a routed endpoint.**
+If none of those yield a bounded template, the middleware emits the sentinel `"<METHOD> <unrouted>"` and logs a warning for each measured request that uses this fallback. Synthetic problem-details endpoints emitted by Asp.Versioning for invalid versions can legitimately use this sentinel. For an application endpoint, supply a stable explicit operation name or a route template.
 
 ## Customizations
 
@@ -249,7 +263,7 @@ HttpContext.GetMeasuredOperation().CustomerResourceId = customerResourceId;
 
 ### Add custom attributes from route parameters
 
-Parameters decorated with `[Measure]` are automatically added as metric dimensions:
+For MVC with SLI `.AddMvc()` registration, and Minimal APIs with `.AddServiceLevelIndicator()` metadata registration, `[Measure]` adds the matching route value as a metric dimension. It does not read model-bound query-string or body values:
 
 ```csharp
 [HttpPost("projects/{projectId}/sync/{mode:regex(^(quick|standard|slow)$)}")]
@@ -259,6 +273,7 @@ public IActionResult Sync(
 ```
 
 Use stable target identifiers and bounded categories such as these three sync modes, not personal names or arbitrary text.
+
 ### Add custom attributes manually
 
 ```csharp
@@ -273,7 +288,7 @@ if (HttpContext.TryGetMeasuredOperation(out var op))
 
 Required tags must be stable and meaningful:
 
-- **`Operation`** is bounded for you by the route-template resolver above (one series per HTTP method × route template). Watch your metrics for the `<unrouted>` sentinel — it means an endpoint is missing a route template.
+- **`Operation`** defaults to HTTP method plus route template; explicit operation names should also be stable. Other dimensions multiply the number of metric series. The `<unrouted>` sentinel identifies measured endpoints without a route template or explicit operation name, including synthetic versioning-error endpoints.
 - **`LocationId`** is set once per process from configuration — naturally bounded.
 - **`CustomerResourceId`** is your responsibility. Use a stable tenant / subscription / resource identifier; do not use per-request GUIDs, timestamps, request IDs, or raw user input. High-cardinality customer resources are acceptable when they are stable, meaningful, and supported by your metrics backend.
 

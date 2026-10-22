@@ -3,7 +3,7 @@ package: Trellis.ServiceLevelIndicators.Asp.ApiVersioning
 namespaces: [Trellis.ServiceLevelIndicators]
 types: [ServiceLevelIndicatorServiceCollectionExtensions, ApiVersionEnrichment]
 version: v10
-last_verified: 2026-10-16
+last_verified: 2026-10-21
 audience: [llm]
 ---
 
@@ -21,7 +21,7 @@ See also the `Trellis.ServiceLevelIndicators` and `Trellis.ServiceLevelIndicator
 
 | Tag | Value |
 |---|---|
-| `http.api.version` | The single resolved API version (e.g. `1.0`, `2.0`, or `2023-06-06`), `"Neutral"` if the endpoint is API-version-neutral, `"Unspecified"` if no version was requested and no default was assumed, or `""` if the request is invalid or ambiguous. |
+| `http.api.version` | The single resolved API version, including an assumed default (e.g. `1.0`, `2.0`, or `2023-06-06`); `"Neutral"` for a version-neutral endpoint with no supplied version; `"Unspecified"` if no version was requested and no default was assumed; or `""` for invalid or ambiguous versions. |
 
 Resolved versions are retained on aborted MVC and Minimal API requests, and on the opt-in `operation.duration.threshold.count` counter. Date-based values remain date-only strings; Kusto may interpret date-like dynamic properties as `datetime`, which should be normalized in queries rather than by changing library formatting.
 
@@ -57,7 +57,7 @@ Reads `HttpContext.ApiVersioningFeature` and emits `http.api.version`. Resolutio
 
 | `RawRequestedApiVersions.Count` | Endpoint metadata | Emitted value |
 |---|---|---|
-| `1` | — | `RequestedApiVersion?.ToString()` (e.g. `"2023-06-06"`) |
+| `1` | — | `RequestedApiVersion?.ToString() ?? ""` (e.g. `"2023-06-06"`) |
 | `> 1` | — | `""` (ambiguous) |
 | `0` | `ApiVersionMetadata.IsApiVersionNeutral == true` | `"Neutral"` |
 | `0` | otherwise | `"Unspecified"` |
@@ -121,6 +121,6 @@ app.MapControllers();
 app.Run();
 ```
 
-Mark the measured controller/action with `[ServiceLevelIndicator]` and declare its supported versions with `[ApiVersion("1.0")]` and `[ApiVersion("2.0")]`. A request such as `GET /projects/project-blue?api-version=2.0` to that controller emits the standard SLI tags plus `http.api.version=2.0`. Date-based versions remain supported. Measured `[ApiVersionNeutral]` endpoints emit `http.api.version=Neutral`.
+Mark the measured controller/action with `[ServiceLevelIndicator]` and declare its supported versions with `[ApiVersion("1.0")]` and `[ApiVersion("2.0")]`. A request such as `GET /projects/project-blue?api-version=2.0` to that controller emits the standard SLI tags plus `http.api.version=2.0`. Date-based versions remain supported. Without a supplied version, measured `[ApiVersionNeutral]` endpoints emit `http.api.version=Neutral`.
 
 `AddApiVersion()` enriches existing SLI measurements; it does not configure version routing or enable measurement on an otherwise excluded/opt-out endpoint.

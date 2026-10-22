@@ -3,7 +3,7 @@ package: Trellis.ServiceLevelIndicators
 namespaces: [Trellis.ServiceLevelIndicators]
 types: [ServiceLevelIndicator, ServiceLevelIndicatorOptions, SliOutcome, MeasuredOperation, ServiceLevelIndicatorEventSource, IServiceLevelIndicatorBuilder, ServiceLevelIndicatorCoreServiceCollectionExtensions, IEnrichmentContext, "IEnrichment<T>", ServiceLevelIndicatorMeterProviderBuilderExtensions]
 version: v10
-last_verified: 2026-10-16
+last_verified: 2026-10-21
 audience: [llm]
 ---
 
@@ -23,7 +23,7 @@ See also the `Trellis.ServiceLevelIndicators.Asp` and `Trellis.ServiceLevelIndic
 
 | Tag | Source |
 |---|---|
-| `CustomerResourceId` | `ServiceLevelIndicatorOptions.CustomerResourceId` (or per-call override) |
+| `CustomerResourceId` | `ServiceLevelIndicatorOptions.CustomerResourceId` (or per-call override); null, empty, or whitespace values normalize to `"Unknown"` |
 | `LocationId` | `ServiceLevelIndicatorOptions.LocationId` |
 | `Operation` | Caller-supplied operation name |
 | `Outcome` | `Success`, `Failure`, `ClientError`, or `Ignored` |
@@ -140,8 +140,8 @@ Bound via `IOptions<ServiceLevelIndicatorOptions>`. `LocationId` and `DurationIn
 |---|---|---|---|
 | `Meter` | `Meter` | `null` (auto-created) | The meter used to create the duration histogram. Set during startup; read once when the `ServiceLevelIndicator` singleton is constructed. |
 | `CustomerResourceId` | `string` | `"Unknown"` | Default `CustomerResourceId` tag value. Can be overridden on each call. When emitted as `Unknown`, the diagnostic counter `sli.diagnostics.unknown_customer_resource_id` is incremented. |
-| `LocationId` | `string` | `""` | **Required.** Where the service is running (e.g. `ms-loc://az/public/westus3`). Must be non-empty. |
-| `DurationInstrumentName` | `string` | `"operation.duration"` | **Required.** Histogram instrument name. Must be non-empty. |
+| `LocationId` | `string` | `""` | **Required.** Where the service is running (e.g. `ms-loc://az/public/westus3`). Must not be null, empty, or whitespace. |
+| `DurationInstrumentName` | `string` | `"operation.duration"` | **Required.** Histogram instrument name. Must not be null, empty, or whitespace. |
 | `LatencyThresholds` | `IList<TimeSpan>` (get-only) | Empty | Startup-only positive, distinct, whole-millisecond thresholds. Snapshotted at construction. Enables the fixed-name threshold counter when nonempty. |
 | `ActivityStatusCodeAttributeName` | `string` | `"activity.status.code"` | Obsolete compatibility option. Activity status is no longer emitted as a metric dimension. |
 | `AutomaticallyEmitted` | `bool` | `true` | Controls ASP.NET automatic emission; when false, endpoints must explicitly opt in. Exclusion metadata takes precedence in either mode. Manual core measurements are unaffected. |

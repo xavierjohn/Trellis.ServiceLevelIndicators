@@ -186,8 +186,7 @@ API references: [Core](docs/api_reference/trellis-api-sli.md) | [ASP.NET Core](d
 
 - [`xavierjohn/Trellis`](https://github.com/xavierjohn/Trellis) — the framework: `Result<T>`, `Maybe<T>`, value objects, DDD primitives, ASP.NET / EF Core / Mediator integration. SLI metrics integrate naturally with Trellis pipeline behaviors.
 - [`xavierjohn/Trellis.Microservices`](https://github.com/xavierjohn/Trellis.Microservices) — microservice trust-boundary packages: YARP gateway minting internal JWTs + consumer-side actor provider.
-- [`xavierjohn/Trellis.Microservices.Template`](https://github.com/xavierjohn/Trellis.Microservices.Template) — `dotnet new trellis-microservices` Project Tracker starter.
-- [`xavierjohn/Trellis.AspTemplate`](https://github.com/xavierjohn/Trellis.AspTemplate) — `dotnet new trellis-asp` single-service Clean Architecture template.
+- [`xavierjohn/Trellis.Templates`](https://github.com/xavierjohn/Trellis.Templates) — `dotnet new trellis-asp` single-service Clean Architecture and `dotnet new trellis-microservices` Aspire-based microservices templates.
 
 ## License
 
